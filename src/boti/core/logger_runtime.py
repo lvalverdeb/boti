@@ -3,6 +3,8 @@ from __future__ import annotations
 import atexit
 import logging
 import threading
+
+__all__ = ["LoggerRuntime"]
 from logging.handlers import QueueListener
 from queue import Queue
 from typing import Tuple

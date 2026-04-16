@@ -16,6 +16,8 @@ import weakref
 import warnings
 from typing import Any, Callable, Optional, Self, final
 
+__all__ = ["ManagedResource"]
+
 import fsspec
 from boti.core.logger import Logger
 from boti.core.models import ResourceConfig

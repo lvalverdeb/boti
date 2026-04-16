@@ -16,6 +16,8 @@ from logging.handlers import QueueHandler
 from pathlib import Path
 from typing import Any, Optional, Union
 
+__all__ = ["Logger"]
+
 
 from boti.core.logger_filters import PIISecretFilter
 from boti.core.logger_handlers import SafeRotatingFileHandler

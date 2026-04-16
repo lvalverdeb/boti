@@ -350,3 +350,108 @@ def test_filesystem_config_from_env_prefix(tmp_path):
     config = FilesystemConfig.from_env_prefix("MYFS_", env_file=env_file)
     assert config.fs_type == "memory"
     assert config.fs_path == "scratch"
+
+
+# ---------------------------------------------------------------------------
+# Timeouts
+# ---------------------------------------------------------------------------
+
+
+def test_filesystem_config_s3_default_timeouts():
+    """S3 config injects connect/read timeouts into client_kwargs by default."""
+    config = FilesystemConfig(fs_type="s3", fs_path="bucket")
+    opts = config.to_fsspec_options()
+    assert opts["client_kwargs"]["connect_timeout"] == 10.0
+    assert opts["client_kwargs"]["read_timeout"] == 30.0
+
+
+def test_filesystem_config_s3_custom_timeouts():
+    config = FilesystemConfig(fs_type="s3", fs_path="bucket", fs_connect_timeout=5.0, fs_read_timeout=60.0)
+    opts = config.to_fsspec_options()
+    assert opts["client_kwargs"]["connect_timeout"] == 5.0
+    assert opts["client_kwargs"]["read_timeout"] == 60.0
+
+
+def test_filesystem_config_s3_timeout_none_disables():
+    """Setting timeouts to None must not inject timeout keys."""
+    config = FilesystemConfig(fs_type="s3", fs_path="bucket", fs_connect_timeout=None, fs_read_timeout=None)
+    opts = config.to_fsspec_options()
+    assert "connect_timeout" not in opts.get("client_kwargs", {})
+    assert "read_timeout" not in opts.get("client_kwargs", {})
+
+
+def test_filesystem_config_http_default_timeout():
+    config = FilesystemConfig(fs_type="http", fs_path="http://example.com/data")
+    opts = config.to_fsspec_options()
+    assert "timeout" in opts
+    assert opts["timeout"] == 30.0  # fs_read_timeout default
+
+
+def test_filesystem_config_local_no_timeout_injected():
+    """Local filesystem must not have timeout keys injected."""
+    config = FilesystemConfig(fs_type="file", fs_path="/data")
+    opts = config.to_fsspec_options()
+    assert "timeout" not in opts
+    assert "client_kwargs" not in opts
+
+
+# ---------------------------------------------------------------------------
+# Retry
+# ---------------------------------------------------------------------------
+
+
+def test_filesystem_adapter_retry_succeeds_on_second_attempt():
+    """FilesystemAdapter retries after a transient OSError."""
+    from boti.core.filesystem import _with_retry
+
+    call_count = 0
+
+    def flaky() -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count < 2:
+            raise OSError("transient failure")
+        return "ok"
+
+    result = _with_retry(flaky, max_attempts=3, base_delay=0.0)
+    assert result == "ok"
+    assert call_count == 2
+
+
+def test_filesystem_adapter_retry_raises_after_max_attempts():
+    """_with_retry re-raises after exhausting all attempts."""
+    from boti.core.filesystem import _with_retry
+
+    def always_fails() -> None:
+        raise ConnectionError("always down")
+
+    with pytest.raises(ConnectionError, match="always down"):
+        _with_retry(always_fails, max_attempts=2, base_delay=0.0)
+
+
+def test_filesystem_adapter_retry_disabled_with_max_one():
+    """max_attempts=1 means no retry — first failure propagates immediately."""
+    from boti.core.filesystem import _with_retry
+
+    call_count = 0
+
+    def flaky() -> None:
+        nonlocal call_count
+        call_count += 1
+        raise OSError("fail")
+
+    with pytest.raises(OSError):
+        _with_retry(flaky, max_attempts=1, base_delay=0.0)
+
+    assert call_count == 1
+
+
+def test_filesystem_adapter_accepts_retry_params():
+    """FilesystemAdapter exposes max_attempts and retry_base_delay."""
+    config = FilesystemConfig(fs_type="memory", fs_path="retry-test")
+    adapter = FilesystemAdapter(config, max_attempts=5, retry_base_delay=0.1)
+    assert adapter._max_attempts == 5
+    assert adapter._retry_base_delay == 0.1
+    # Verify it still works end-to-end.
+    fs = adapter.get_filesystem()
+    assert fs is not None

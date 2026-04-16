@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+__all__ = ["LoggerConfig", "ResourceConfig"]
+
 import re
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
 from typing import Any, ClassVar, Optional, Union

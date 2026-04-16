@@ -10,6 +10,14 @@ import re
 from pathlib import Path
 from typing import Iterable, Mapping, Union
 
+__all__ = [
+    "is_secure_path",
+    "is_valid_identifier",
+    "is_valid_dotted_identifier",
+    "is_valid_env_var_name",
+    "validate_environment_bindings",
+]
+
 
 def is_secure_path(target_file: Union[str, Path], allowed_dirs: Iterable[Union[str, Path]]) -> bool:
     """

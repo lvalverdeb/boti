@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Mapping
 
+__all__ = ["PIISecretFilter"]
+
 
 class PIISecretFilter(logging.Filter):
     """Redact obvious secrets and sensitive fields from log records."""
