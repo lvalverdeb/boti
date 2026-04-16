@@ -12,8 +12,36 @@ import fsspec
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
-from boti.core.security import is_valid_dotted_identifier
 from boti.core.settings import FilesystemSettings, load_prefixed_model
+
+# Explicit allowlist of fsspec backend identifiers that are safe to instantiate
+# from user-supplied or environment-backed configuration.  Arbitrary backends
+# (e.g. custom handlers, ssh, smb) must be constructed directly via fsspec.
+_ALLOWED_FS_TYPES: frozenset[str] = frozenset({
+    "file",
+    "local",
+    "memory",
+    "s3",
+    "s3a",
+    "gcs",
+    "gs",
+    "az",
+    "abfs",
+    "adl",
+    "ftp",
+    "sftp",
+    "http",
+    "https",
+    "zip",
+    "tar",
+    "blockcache",
+    "filecache",
+    "simplecache",
+    "github",
+    "git",
+    "arrow_hdfs",
+    "hdfs",
+})
 
 
 class FilesystemConfig(BaseModel):
@@ -27,7 +55,7 @@ class FilesystemConfig(BaseModel):
     fs_secret: Optional[SecretStr] = Field(default=None)
     fs_endpoint: Optional[str] = Field(default=None)
     fs_token: Optional[SecretStr] = Field(default=None)
-    fs_region: str = Field(default="us-east-1")
+    fs_region: Optional[str] = Field(default=None)
     fs_verify_ssl: bool = Field(default=True)
     fs_options: dict[str, Any] = Field(default_factory=dict)
 
@@ -52,8 +80,14 @@ class FilesystemConfig(BaseModel):
     @classmethod
     def validate_fs_type(cls, value: str) -> str:
         normalized = value.strip()
-        if not normalized or not is_valid_dotted_identifier(normalized.replace("-", "_").replace("+", "_")):
-            raise ValueError("fs_type must be a simple filesystem backend identifier.")
+        if not normalized:
+            raise ValueError("fs_type must not be empty.")
+        if normalized not in _ALLOWED_FS_TYPES:
+            raise ValueError(
+                f"fs_type '{normalized}' is not an allowed backend. "
+                f"Permitted values: {sorted(_ALLOWED_FS_TYPES)}. "
+                "To use a custom backend, construct the fsspec filesystem directly."
+            )
         return normalized
 
     @field_validator("fs_path")

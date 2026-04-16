@@ -10,6 +10,8 @@ import logging
 import os
 import sys
 import threading
+import warnings
+from collections import OrderedDict
 from logging.handlers import QueueHandler
 from pathlib import Path
 from typing import Any, Optional, Union
@@ -28,7 +30,11 @@ class Logger:
     """
 
     DEFAULT_LOGGER_NAME = "boti"
-    _default_logger_cache: dict[tuple[Path, str, str], "Logger"] = {}
+    # Bounded LRU cache: key = (log_dir, logger_name, log_file, log_level).
+    # Including log_level prevents a cached instance silently ignoring level changes.
+    # Capped at 256 entries to avoid unbounded file-descriptor growth in long-running apps.
+    _MAX_CACHE_SIZE = 256
+    _default_logger_cache: OrderedDict[tuple[Path, str, str, int], "Logger"] = OrderedDict()
     _default_logger_lock = threading.RLock()
 
     DEBUG = logging.DEBUG
@@ -78,11 +84,16 @@ class Logger:
 
         resolved_log_dir = cls._resolve_log_dir(log_dir, base_dir=base_dir)
         effective_log_file = log_file or logger_name
-        cache_key = (resolved_log_dir, logger_name, effective_log_file)
+        # log_level is part of the key so two callers requesting different levels
+        # get distinct instances rather than the second silently overriding the first.
+        cache_key = (resolved_log_dir, logger_name, effective_log_file, log_level)
 
         with cls._default_logger_lock:
             logger = cls._default_logger_cache.get(cache_key)
             if logger is None:
+                if len(cls._default_logger_cache) >= cls._MAX_CACHE_SIZE:
+                    # Evict the least-recently-used entry (first in insertion order).
+                    cls._default_logger_cache.popitem(last=False)
                 config = LoggerConfig(
                     log_dir=resolved_log_dir,
                     logger_name=logger_name,
@@ -91,7 +102,9 @@ class Logger:
                 )
                 logger = cls(config)
                 cls._default_logger_cache[cache_key] = logger
-            logger.set_level(log_level)
+            else:
+                # Move to end to mark as most-recently-used.
+                cls._default_logger_cache.move_to_end(cache_key)
             return logger
 
     @staticmethod
@@ -129,11 +142,27 @@ class Logger:
     def _setup_handlers(self) -> None:
         """
         Configures non-blocking log handling via a QueueListener.
+
+        Symlink-targeted log directories are rejected as a hard security error.
+        If the directory cannot be created for any other reason (e.g. permission
+        denied) the logger falls back to stderr-only output and emits a warning,
+        so the application can still start rather than failing at logger init.
         """
         if self.log_dir.is_symlink():
             raise ValueError(f"log_dir must not be a symlink: {self.log_dir}")
 
-        self.log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.log_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            warnings.warn(
+                f"Logger '{self.logger_name}' could not create log directory "
+                f"'{self.log_dir}': {exc}. Falling back to stderr only.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            self._setup_stderr_only_handler()
+            return
+
         self._restrict_permissions(self.log_dir, 0o700)
 
         log_file_path = self.log_dir / f"{self.log_file}.log"
@@ -161,6 +190,21 @@ class Logger:
             ), fmt)
 
             LoggerRuntime.add_destination(console_key, logging.StreamHandler(sys.stdout), fmt)
+
+    def _setup_stderr_only_handler(self) -> None:
+        """Attach a simple stderr handler when file logging is unavailable."""
+        fmt = logging.Formatter(
+            "[%(asctime)s][%(levelname)s][%(name)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        with LoggerRuntime._lock:
+            LoggerRuntime.ensure_listener()
+            if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
+                qh = QueueHandler(LoggerRuntime._log_queue)
+                qh.addFilter(PIISecretFilter())
+                self._core.addHandler(qh)
+            console_key = (self.logger_name, "__console__")
+            LoggerRuntime.add_destination(console_key, logging.StreamHandler(sys.stderr), fmt)
 
     @staticmethod
     def _restrict_permissions(path: Path, mode: int) -> None:

@@ -13,8 +13,9 @@ class LoggerRuntime:
 
     _lock = threading.RLock()
     _attached_keys: set[Tuple[str, str]] = set()
-    _log_queue: Queue[logging.LogRecord | None] = Queue(-1)
+    _log_queue: Queue[logging.LogRecord] = Queue(-1)
     _listener: QueueListener | None = None
+    _atexit_registered: bool = False
 
     @classmethod
     def ensure_listener(cls) -> None:
@@ -22,7 +23,9 @@ class LoggerRuntime:
             return
         cls._listener = QueueListener(cls._log_queue, respect_handler_level=True)
         cls._listener.start()
-        atexit.register(cls.stop_listener)
+        if not cls._atexit_registered:
+            atexit.register(cls.stop_listener)
+            cls._atexit_registered = True
 
     @classmethod
     def add_destination(
@@ -34,17 +37,24 @@ class LoggerRuntime:
         if key in cls._attached_keys:
             return
 
+        if cls._listener is None:
+            raise RuntimeError(
+                "LoggerRuntime.ensure_listener() must be called before add_destination()."
+            )
+
         logger_name, _ = key
         handler.addFilter(logging.Filter(name=logger_name))
         handler.setFormatter(formatter)
-
-        if cls._listener:
-            cls._listener.handlers = cls._listener.handlers + (handler,)
-
+        cls._listener.handlers = cls._listener.handlers + (handler,)
         cls._attached_keys.add(key)
 
     @classmethod
     def stop_listener(cls) -> None:
-        if cls._listener:
-            cls._log_queue.put_nowait(None)
-            cls._listener.stop()
+        """Stop the background listener.  Safe to call multiple times."""
+        with cls._lock:
+            if cls._listener is None:
+                return
+            listener = cls._listener
+            cls._listener = None
+        # Stop outside the lock so handlers can flush without deadlocking.
+        listener.stop()

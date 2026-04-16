@@ -87,5 +87,9 @@ def validate_environment_bindings(bindings: Mapping[str, str]) -> dict[str, str]
             raise ValueError(
                 f"Environment variable '{key}' must not contain NUL bytes."
             )
+        if "\n" in value or "\r" in value:
+            raise ValueError(
+                f"Environment variable '{key}' must not contain newline characters."
+            )
         validated[key] = value
     return validated
