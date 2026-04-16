@@ -6,7 +6,7 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.13"
 authors = [
-    {name="Luis Valverde",email = "lvalverdeb@users.noreply.github.com"},
+    {name="Luis Valverde",email = "lvalverdeb@gmail.com"},
 ]
 classifiers = [
     "Development Status :: 4 - Beta",

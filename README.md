@@ -13,9 +13,6 @@ At its core, `boti` is about giving transformation code a consistent runtime mod
 - how projects discover their root and runtime configuration
 - how logs are emitted in a predictable way
 
-The companion package **`boti-data`** extends that foundation with SQL, parquet, schema, gateway, and distributed data capabilities. It is a separate package with its own release cycle.
-
-
 ## What problem `boti` solves
 
 A lot of data and automation code starts small and quickly becomes operationally messy:
@@ -62,20 +59,6 @@ You can also import from `boti.core` directly:
 
 ```python
 from boti.core import Logger, ManagedResource, ProjectService, SecureResource
-```
-
-### Data package
-
-`boti-data` is a separate package. Install it independently:
-
-```bash
-pip install boti-data
-```
-
-Data imports live under the separate top-level package:
-
-```python
-from boti_data import DataGateway, DataHelper, SqlDatabaseConfig, SqlDatabaseResource
 ```
 
 ## Quick start
