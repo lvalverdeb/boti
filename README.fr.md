@@ -61,26 +61,6 @@ Vous pouvez également importer directement depuis `boti.core` :
 from boti.core import Logger, ManagedResource, ProjectService, SecureResource
 ```
 
-### Paquet principal + données
-
-`boti-data` est la couche de données complémentaire. Elle étend `boti` avec des ressources de bases de données SQL, des lecteurs parquet, des catalogues de connexions, la validation de schémas et des flux de chargement distribués.
-
-```bash
-pip install "boti[data]"
-```
-
-ou :
-
-```bash
-pip install boti-data
-```
-
-Les importations de données se trouvent dans le paquet de niveau supérieur séparé :
-
-```python
-from boti_data import DataGateway, DataHelper, SqlDatabaseConfig, SqlDatabaseResource
-```
-
 ## Démarrage rapide
 
 ### Ressource gérée
@@ -492,7 +472,6 @@ N'activez `allow_pickle` que lorsque vous contrôlez les deux extrémités du ca
 ## Documentation spécifique aux paquets
 
 - [`packages/boti/README.md`](packages/boti/README.md)
-- [`packages/boti-data/README.md`](packages/boti-data/README.md)
 - [`examples/`](examples/)
 - [`docs/`](docs/)
 
