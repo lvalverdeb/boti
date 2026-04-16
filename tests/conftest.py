@@ -1,5 +1,5 @@
 """
-Shared pytest fixtures for sibi_tools.core tests.
+Shared pytest fixtures for boti.core tests.
 """
 import datetime
 import sqlite3

@@ -1,5 +1,7 @@
 # boti
 
+[English](README.md) · [Español](README.es.md) · [Français](README.fr.md)
+
 `boti` stands for **Base Object Transformation Interface**.
 
 It is a Python library for building **reliable, reusable transformation-oriented software**: scripts, services, data pipelines, batch jobs, notebook helpers, and internal tooling that all need the same operational foundations.
@@ -10,8 +12,6 @@ At its core, `boti` is about giving transformation code a consistent runtime mod
 - how file access is constrained and validated
 - how projects discover their root and runtime configuration
 - how logs are emitted in a predictable way
-
-The repository also contains the companion package **`boti-data`**, which extends that foundation with SQL, parquet, schema, gateway, and distributed data capabilities.
 
 ## What problem `boti` solves
 
@@ -40,41 +40,6 @@ It helps by:
 
 This is especially valuable when multiple teams or notebooks interact with the same codebase, because it reduces hidden assumptions and makes behaviour more predictable.
 
-## What `boti-data` adds
-
-`boti-data` is the data layer for the Boti ecosystem.
-
-Where `boti` solves the runtime and application-structure problems, `boti-data` solves the **data access and data movement problems** that appear once teams need to work across databases, parquet files, schemas, and distributed workloads.
-
-It provides:
-
-- SQL database resources and session management
-- SQLAlchemy model reflection and model registries
-- connection catalogues for named data sources
-- gateway-style loading APIs
-- parquet resources and readers
-- schema normalisation, validation, and field mapping
-- filter expressions and join helpers
-- partitioned and distributed loading workflows
-
-In practice, it helps teams replace repetitive, hand-rolled access code with a consistent interface for loading, validating, shaping, and moving data.
-
-## Where `boti-data` can make a big difference
-
-`boti-data` is useful anywhere teams need to bridge operational systems and analytical workflows without rewriting the same infrastructure over and over.
-
-It can be especially impactful in domains such as:
-
-- **analytics engineering**: consistent loading from source systems into analysis-ready frames
-- **business intelligence**: reusable connection catalogues, filters, and schema handling across reports
-- **operations and supply chain**: joining transactional data from multiple systems with safer loading patterns
-- **finance and risk**: explicit schemas, reproducible transformations, and controlled access to structured data
-- **customer, product, and growth analytics**: repeatable extraction and normalisation across many upstream tables
-- **ML and feature pipelines**: partitioned loads, parquet workflows, and predictable resource management
-- **research and notebook-heavy teams**: moving from exploratory code to reusable library code without losing speed
-
-The value is largest when data work sits in the gap between raw infrastructure and business logic: not just querying tables, but building maintainable, reusable data interfaces.
-
 ## Packages
 
 ### Core package
@@ -97,6 +62,8 @@ from boti.core import Logger, ManagedResource, ProjectService, SecureResource
 ```
 
 ### Core + data package
+
+`boti-data` is the companion data layer. It extends `boti` with SQL database resources, parquet readers, connection catalogues, schema validation, and distributed loading workflows.
 
 ```bash
 pip install "boti[data]"
@@ -351,6 +318,176 @@ async def main(client) -> None:
 ```
 
 If a subclass only implements `_cleanup()`, `await resource.aclose()` will fall back to running the synchronous cleanup safely.
+
+### Pickleable resources
+
+By default, `ManagedResource` refuses to be pickled. Pickling is an explicit opt-in that you should only enable when both the serialization site and the deserialization site are in runtimes you control.
+
+This is useful when you need to distribute work across processes or machines and want to carry resource configuration — connection parameters, paths, operational settings — alongside the task rather than re-building it from scratch in each worker.
+
+Typical use cases:
+
+- **multiprocessing** — sending a configured resource into a `Pool` worker
+- **distributed computing** — shipping resource configuration to Dask, Ray, or Spark workers
+- **task queues** — checkpointing resource state across Celery or RQ tasks
+
+#### How the opt-in works
+
+There are two independent gates that both must be open for pickling to work:
+
+1. `allow_pickle=True` in the resource's `ResourceConfig` — set at construction time, travels with the pickled payload
+2. The environment variable `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE=1` present in the worker process at unpickle time
+
+This two-factor design means a serialized resource cannot be silently loaded in an environment that has not been explicitly configured to trust it.
+
+#### What is and is not preserved
+
+When a resource is pickled, `ManagedResource` automatically strips state that cannot cross a process boundary:
+
+- thread locks and asyncio locks (recreated on the other side)
+- the finalizer (reattached on the other side)
+- the logger instance (rebuilt from config on the other side)
+- the live filesystem handle and factory (cleared; see `_restore_runtime_state` below)
+
+Configuration values such as `ResourceConfig` fields and any subclass attributes that are themselves pickleable are preserved intact.
+
+#### Basic example
+
+```python
+import pickle
+from pathlib import Path
+
+from boti import ManagedResource
+from boti.core.models import ResourceConfig
+
+
+class ReportResource(ManagedResource):
+    def __init__(self, output_dir: Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.output_dir = output_dir
+
+    def _cleanup(self) -> None:
+        pass
+
+
+# --- serialization side ---
+config = ResourceConfig(allow_pickle=True)
+resource = ReportResource(output_dir=Path("/srv/reports"), config=config)
+
+payload = pickle.dumps(resource)
+resource.close()
+
+# --- deserialization side (worker process) ---
+with ManagedResource.trusted_unpickle_scope():
+    restored = pickle.loads(payload)
+
+print(restored.output_dir)  # /srv/reports
+print(restored.closed)      # False
+restored.close()
+```
+
+`trusted_unpickle_scope()` is a context manager that sets `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE=1` for its duration and restores the original value on exit. Use it at the worker entry point rather than setting the variable globally whenever possible.
+
+#### Rebuilding transient connections after unpickling
+
+If your resource holds a live connection object — a database session, an HTTP client, an open file handle — that connection will not survive pickling. Override `_restore_runtime_state()` to re-establish it on the worker side.
+
+```python
+import pickle
+from pathlib import Path
+
+from boti import ManagedResource
+from boti.core.models import ResourceConfig
+
+
+class CsvResource(ManagedResource):
+    def __init__(self, data_dir: Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.data_dir = data_dir
+        self._handle = None  # opened lazily or restored after unpickling
+
+    def _restore_runtime_state(self) -> None:
+        # Called automatically by __setstate__ after the object is unpickled.
+        # Re-open connections or re-initialise state that cannot be transferred.
+        self._handle = None  # will be opened on first use
+
+    def read(self, filename: str) -> str:
+        path = self.data_dir / filename
+        with open(path) as f:
+            return f.read()
+
+    def _cleanup(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+
+
+# --- main process: create and pickle ---
+config = ResourceConfig(allow_pickle=True)
+resource = CsvResource(data_dir=Path("/srv/data"), config=config)
+payload = pickle.dumps(resource)
+resource.close()
+
+# --- worker process: restore and use ---
+with ManagedResource.trusted_unpickle_scope():
+    worker_resource = pickle.loads(payload)
+
+with worker_resource:
+    content = worker_resource.read("summary.csv")
+    print(content)
+```
+
+#### Using with multiprocessing
+
+The most common use is sending resource configuration to a pool of workers. Set the environment variable in the worker initialiser so it is present before any task unpickles a resource.
+
+```python
+import os
+import pickle
+import multiprocessing
+from pathlib import Path
+
+from boti import ManagedResource
+from boti.core.models import ResourceConfig
+
+
+class WorkerResource(ManagedResource):
+    def __init__(self, data_dir: Path, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.data_dir = data_dir
+
+    def process(self, filename: str) -> int:
+        return len((self.data_dir / filename).read_bytes())
+
+    def _cleanup(self) -> None:
+        pass
+
+
+def worker_init():
+    os.environ[ManagedResource._TRUSTED_UNPICKLE_ENV] = "1"
+
+
+def run_task(payload: bytes, filename: str) -> int:
+    resource = pickle.loads(payload)
+    with resource:
+        return resource.process(filename)
+
+
+if __name__ == "__main__":
+    config = ResourceConfig(allow_pickle=True)
+    resource = WorkerResource(data_dir=Path("/srv/data"), config=config)
+    payload = pickle.dumps(resource)
+    resource.close()
+
+    with multiprocessing.Pool(initializer=worker_init) as pool:
+        sizes = pool.starmap(run_task, [(payload, f) for f in ["a.bin", "b.bin"]])
+
+    print(sizes)
+```
+
+#### Security note
+
+Enable `allow_pickle` only when you control both ends of the serialization channel. Unpickling data from untrusted sources can execute arbitrary code. The `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE` environment variable is the last line of defense: do not set it globally in environments that process data from external sources.
 
 ## More package-specific docs
 
