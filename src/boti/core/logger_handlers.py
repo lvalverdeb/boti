@@ -3,6 +3,8 @@ from __future__ import annotations
 import errno
 import os
 import stat
+
+__all__ = ["SafeRotatingFileHandler"]
 from logging.handlers import RotatingFileHandler
 from typing import Any
 

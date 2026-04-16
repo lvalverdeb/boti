@@ -10,6 +10,8 @@ import inspect
 import os
 import warnings
 from pathlib import Path
+
+__all__ = ["ProjectService"]
 from typing import Iterable, Optional, Union
 
 from boti.core.security import is_secure_path

@@ -4,9 +4,20 @@ Typed filesystem configuration and runtime adapters.
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional, TypeVar
+
+_logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
+
+__all__ = [
+    "FilesystemConfig",
+    "FilesystemAdapter",
+    "create_filesystem",
+]
 
 import fsspec
 import pyarrow.fs as pafs
@@ -57,6 +68,14 @@ class FilesystemConfig(BaseModel):
     fs_token: Optional[SecretStr] = Field(default=None)
     fs_region: Optional[str] = Field(default=None)
     fs_verify_ssl: bool = Field(default=True)
+    fs_connect_timeout: Optional[float] = Field(
+        default=10.0,
+        description="TCP connect timeout in seconds for remote backends. None disables the timeout.",
+    )
+    fs_read_timeout: Optional[float] = Field(
+        default=30.0,
+        description="Socket read timeout in seconds for remote backends. None disables the timeout.",
+    )
     fs_options: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
@@ -106,7 +125,8 @@ class FilesystemConfig(BaseModel):
 
     def to_fsspec_options(self) -> dict[str, Any]:
         options = dict(self.fs_options)
-        if self.fs_type == "s3":
+
+        if self.fs_type in {"s3", "s3a"}:
             if self.fs_key:
                 options["key"] = self.fs_key
             if self.fs_secret is not None:
@@ -114,19 +134,35 @@ class FilesystemConfig(BaseModel):
             if self.fs_token is not None:
                 options["token"] = self.fs_token.get_secret_value()
 
-            client_kwargs = dict(options.get("client_kwargs", {}))
+            client_kwargs: dict[str, Any] = dict(options.get("client_kwargs", {}))
             if self.fs_endpoint:
                 client_kwargs["endpoint_url"] = self.fs_endpoint
             if self.fs_region:
                 client_kwargs["region_name"] = self.fs_region
+            # Inject connect/read timeouts via botocore config if not already set.
+            if self.fs_connect_timeout is not None and "connect_timeout" not in client_kwargs:
+                client_kwargs["connect_timeout"] = self.fs_connect_timeout
+            if self.fs_read_timeout is not None and "read_timeout" not in client_kwargs:
+                client_kwargs["read_timeout"] = self.fs_read_timeout
             if client_kwargs:
                 options["client_kwargs"] = client_kwargs
 
-            config_kwargs = dict(options.get("config_kwargs", {}))
+            config_kwargs: dict[str, Any] = dict(options.get("config_kwargs", {}))
             if "verify" not in options:
                 options["verify"] = self.fs_verify_ssl
             if config_kwargs:
                 options["config_kwargs"] = config_kwargs
+
+        elif self.fs_type in {"http", "https"}:
+            # aiohttp / requests accept a unified timeout value.
+            if "timeout" not in options:
+                timeout = self.fs_read_timeout or self.fs_connect_timeout
+                if timeout is not None:
+                    options["timeout"] = timeout
+
+        elif self.fs_type in {"ftp", "sftp"}:
+            if self.fs_connect_timeout is not None and "timeout" not in options:
+                options["timeout"] = self.fs_connect_timeout
 
         return options
 
@@ -136,11 +172,79 @@ def create_filesystem(config: FilesystemConfig) -> fsspec.AbstractFileSystem:
     return fsspec.filesystem(config.fs_type, **config.to_fsspec_options())
 
 
-class FilesystemAdapter:
-    """Runtime adapter that caches filesystem clients for a named profile."""
+# Transient error types that are safe to retry across all backends.
+_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
+    OSError,
+    TimeoutError,
+    ConnectionError,
+)
 
-    def __init__(self, config: FilesystemConfig) -> None:
+
+def _with_retry(
+    fn: Callable[[], _T],
+    *,
+    max_attempts: int = 3,
+    base_delay: float = 0.5,
+    label: str = "operation",
+) -> _T:
+    """Call *fn* with exponential back-off on transient errors.
+
+    Args:
+        fn: Zero-argument callable to retry.
+        max_attempts: Maximum number of attempts (default 3).
+        base_delay: Initial delay between attempts in seconds; doubles each retry.
+        label: Human-readable label used in log messages.
+
+    Returns:
+        The return value of *fn* on the first successful call.
+
+    Raises:
+        The last exception raised by *fn* if all attempts fail.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except _RETRYABLE_ERRORS as exc:
+            last_exc = exc
+            if attempt == max_attempts:
+                break
+            delay = base_delay * (2 ** (attempt - 1))
+            _logger.warning(
+                "boti.filesystem: %s failed (attempt %d/%d): %s — retrying in %.1fs",
+                label,
+                attempt,
+                max_attempts,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+    raise last_exc  # type: ignore[misc]
+
+
+class FilesystemAdapter:
+    """Runtime adapter that caches filesystem clients for a named profile.
+
+    Wraps :func:`create_filesystem` with automatic retry on transient I/O errors
+    so brief network hiccups do not immediately surface as hard failures.
+
+    Args:
+        config: Typed filesystem configuration.
+        max_attempts: How many times to attempt a connection before giving up.
+            Defaults to 3. Set to 1 to disable retry.
+        retry_base_delay: Initial back-off delay in seconds; doubles each retry.
+    """
+
+    def __init__(
+        self,
+        config: FilesystemConfig,
+        *,
+        max_attempts: int = 3,
+        retry_base_delay: float = 0.5,
+    ) -> None:
         self.config = config
+        self._max_attempts = max_attempts
+        self._retry_base_delay = retry_base_delay
         self._lock = threading.RLock()
         self._fs: Optional[fsspec.AbstractFileSystem] = None
         self._arrow_fs: Optional[pafs.FileSystem] = None
@@ -153,7 +257,12 @@ class FilesystemAdapter:
     def get_filesystem(self) -> fsspec.AbstractFileSystem:
         with self._lock:
             if self._fs is None:
-                self._fs = create_filesystem(self.config)
+                self._fs = _with_retry(
+                    lambda: create_filesystem(self.config),
+                    max_attempts=self._max_attempts,
+                    base_delay=self._retry_base_delay,
+                    label=f"connect({self.config.fs_type}:{self.config.fs_path})",
+                )
             return self._fs
 
     def invalidate(self) -> None:

@@ -11,6 +11,8 @@ import warnings
 from pathlib import Path
 from typing import Any, Optional, Union
 
+__all__ = ["SecureResource"]
+
 from boti.core.managed_resource import ManagedResource
 from boti.core.models import ResourceConfig
 from boti.core.project import ProjectService
