@@ -253,33 +253,37 @@ class ManagedResource(abc.ABC):
 
     @final
     def close(self, *, suppress_errors: bool = False) -> None:
-        """Synchronously release managed resources."""
-        acquired = self._state_lock.acquire(blocking=False)
-        if not acquired:
-            return  # Already closing or closed
+        """Synchronously release managed resources.
 
+        Thread-safe and idempotent: concurrent or repeated calls are silently
+        ignored after the first caller sets ``_closing``.  The state lock is
+        held only for the brief state-transition checks; the actual cleanup
+        runs outside the lock so subclass hooks can freely call other methods.
+        """
+        with self._state_lock:
+            if self._is_closed or self._closing:
+                return
+            self._closing = True
         try:
-            with self._state_lock:
-                if self._is_closed or self._closing:
-                    return
-                self._closing = True
-
-            try:
-                self._cleanup()
-            except Exception:
-                self.logger.error(f"Error during {self.__class__.__name__}._cleanup()", exc_info=self.debug)
-                if not suppress_errors:
-                    raise
-            finally:
-                with self._state_lock:
-                    self._is_closed = True
-                    self._closing = False
+            self._cleanup()
+        except Exception:
+            self.logger.error(f"Error during {self.__class__.__name__}._cleanup()", exc_info=self.debug)
+            if not suppress_errors:
+                raise
         finally:
-            self._state_lock.release()
+            with self._state_lock:
+                self._is_closed = True
+                self._closing = False
             self._detach_finalizer()
 
     async def aclose(self, *, suppress_errors: bool = False) -> None:
-        """Asynchronously release managed resources."""
+        """Asynchronously release managed resources.
+
+        The async lock serialises concurrent async closes within the same event
+        loop.  ``_closing`` guards against a simultaneous sync ``close()`` from
+        another thread.  ``_detach_finalizer`` is called inside the ``finally``
+        block so it runs even when cleanup raises.
+        """
         async with self._aclose_lock:
             with self._state_lock:
                 if self._is_closed or self._closing:
@@ -299,8 +303,7 @@ class ManagedResource(abc.ABC):
                 with self._state_lock:
                     self._is_closed = True
                     self._closing = False
-
-        self._detach_finalizer()
+                self._detach_finalizer()
 
     @final
     def __enter__(self) -> Self:
@@ -309,11 +312,14 @@ class ManagedResource(abc.ABC):
 
     @final
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        self.close(suppress_errors=False)
+        # Suppress cleanup errors only when an exception is already propagating,
+        # so the original exception is not replaced by a cleanup failure.
+        self.close(suppress_errors=exc_type is not None)
 
     async def __aenter__(self) -> Self:
         self._assert_open()
         return self
 
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        await self.aclose(suppress_errors=False)
+        # Same rationale as __exit__: preserve the original exception.
+        await self.aclose(suppress_errors=exc_type is not None)

@@ -13,6 +13,9 @@ At its core, `boti` is about giving transformation code a consistent runtime mod
 - how projects discover their root and runtime configuration
 - how logs are emitted in a predictable way
 
+The companion package **`boti-data`** extends that foundation with SQL, parquet, schema, gateway, and distributed data capabilities. It is a separate package with its own release cycle.
+
+
 ## What problem `boti` solves
 
 A lot of data and automation code starts small and quickly becomes operationally messy:
@@ -61,15 +64,9 @@ You can also import from `boti.core` directly:
 from boti.core import Logger, ManagedResource, ProjectService, SecureResource
 ```
 
-### Core + data package
+### Data package
 
-`boti-data` is the companion data layer. It extends `boti` with SQL database resources, parquet readers, connection catalogues, schema validation, and distributed loading workflows.
-
-```bash
-pip install "boti[data]"
-```
-
-or:
+`boti-data` is a separate package. Install it independently:
 
 ```bash
 pip install boti-data
@@ -489,12 +486,9 @@ if __name__ == "__main__":
 
 Enable `allow_pickle` only when you control both ends of the serialization channel. Unpickling data from untrusted sources can execute arbitrary code. The `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE` environment variable is the last line of defense: do not set it globally in environments that process data from external sources.
 
-## More package-specific docs
+## More docs
 
-- [`packages/boti/README.md`](packages/boti/README.md)
-- [`packages/boti-data/README.md`](packages/boti-data/README.md)
 - [`examples/`](examples/)
-- [`docs/`](docs/)
 
 ## Development
 
