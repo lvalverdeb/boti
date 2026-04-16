@@ -7,6 +7,7 @@ to prevent path traversal attacks during file operations.
 
 from __future__ import annotations
 import tempfile
+import warnings
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -36,9 +37,23 @@ class SecureResource(ManagedResource):
         root = self.config.project_root or ProjectService.detect_project_root()
         self.project_root = Path(root).resolve()
 
-        configured_allowed_paths = [
-            Path(p).resolve() for p in self.config.extra_allowed_paths
-        ]
+        configured_allowed_paths: list[Path] = []
+        for raw in self.config.extra_allowed_paths:
+            resolved = Path(raw).resolve()
+            if resolved.is_symlink():
+                warnings.warn(
+                    f"extra_allowed_path is a symlink and may not provide the intended "
+                    f"sandbox boundary: {raw!r}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            elif not resolved.exists():
+                warnings.warn(
+                    f"extra_allowed_path does not exist and will have no effect: {raw!r}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            configured_allowed_paths.append(resolved)
         default_allowed_paths = [self.project_root, Path(tempfile.gettempdir()).resolve()]
 
         self.allowed_paths: list[Path] = []

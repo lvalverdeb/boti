@@ -119,6 +119,6 @@ class FilesystemSettings(BaseModel):
     fs_secret: Optional[SecretStr] = Field(default=None)
     fs_endpoint: Optional[str] = Field(default=None)
     fs_token: Optional[SecretStr] = Field(default=None)
-    fs_region: str = Field(default="us-east-1")
+    fs_region: Optional[str] = Field(default=None)
     fs_verify_ssl: bool = Field(default=True)
     fs_options: dict[str, Any] = Field(default_factory=dict)

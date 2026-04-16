@@ -11,7 +11,7 @@ At its core, `boti` is about giving transformation code a consistent runtime mod
 - how projects discover their root and runtime configuration
 - how logs are emitted in a predictable way
 
-The repository also contains the companion package **`boti-data`**, which extends that foundation with SQL, parquet, schema, gateway, and distributed data capabilities.
+The companion package **`boti-data`** extends that foundation with SQL, parquet, schema, gateway, and distributed data capabilities. It is a separate package with its own release cycle.
 
 ## What problem `boti` solves
 
@@ -96,13 +96,9 @@ You can also import from `boti.core` directly:
 from boti.core import Logger, ManagedResource, ProjectService, SecureResource
 ```
 
-### Core + data package
+### Data package
 
-```bash
-pip install "boti[data]"
-```
-
-or:
+`boti-data` is a separate package. Install it independently:
 
 ```bash
 pip install boti-data
@@ -352,12 +348,9 @@ async def main(client) -> None:
 
 If a subclass only implements `_cleanup()`, `await resource.aclose()` will fall back to running the synchronous cleanup safely.
 
-## More package-specific docs
+## More docs
 
-- [`packages/boti/README.md`](packages/boti/README.md)
-- [`packages/boti-data/README.md`](packages/boti-data/README.md)
 - [`examples/`](examples/)
-- [`docs/`](docs/)
 
 ## Development
 

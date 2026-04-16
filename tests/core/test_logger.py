@@ -39,7 +39,12 @@ def test_logger_pii_redaction(temp_log_dir):
 
 
 def test_logger_pii_redaction_clears_sensitive_args(temp_log_dir):
-    """Verify format arguments containing secrets are redacted without breaking logging."""
+    """Verify format arguments containing secrets are redacted without destroying log context.
+
+    When only the *arguments* are sensitive the format string is preserved so the log
+    retains debugging context (e.g. ``credential=[REDACTED]``).  When the *format string
+    itself* contains a sensitive keyword the entire message is replaced.
+    """
     config = LoggerConfig(
         log_dir=temp_log_dir,
         logger_name="pii_args_test",
@@ -47,7 +52,9 @@ def test_logger_pii_redaction_clears_sensitive_args(temp_log_dir):
     )
     logger = Logger(config)
 
+    # msg does not contain a sensitive key; the arg value does — arg is redacted, msg kept.
     logger.info("credential=%s", "api_key=abc-xyz")
+    # msg contains "authorization" (a sensitive key) — entire message is redacted.
     logger.info("authorization=%s", "Bearer secret123")
 
     time.sleep(0.5)
@@ -55,7 +62,10 @@ def test_logger_pii_redaction_clears_sensitive_args(temp_log_dir):
     log_file = temp_log_dir / "pii_args_test.log"
     content = log_file.read_text()
 
-    assert content.count("[REDACTED SENSITIVE DATA]") == 2
+    # The format-string-level redaction fires for "authorization=%s"
+    assert "[REDACTED SENSITIVE DATA]" in content
+    # The arg-level redaction fires for "credential=%s" — value replaced, key kept
+    assert "[REDACTED]" in content
     assert "abc-xyz" not in content
     assert "secret123" not in content
 

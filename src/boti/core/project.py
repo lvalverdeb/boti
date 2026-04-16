@@ -8,6 +8,7 @@ ensuring that toolkit operations are context-aware.
 from __future__ import annotations
 import inspect
 import os
+import warnings
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
@@ -65,8 +66,23 @@ class ProjectService:
 
         for candidate in candidates:
             if candidate.parent != candidate:
+                warnings.warn(
+                    f"boti could not locate a project root marker "
+                    f"(pyproject.toml, .git, .env, …) from any search path. "
+                    f"Falling back to '{candidate}'. "
+                    "Add a marker file to the project root to suppress this warning.",
+                    UserWarning,
+                    stacklevel=2,
+                )
                 return candidate
 
+        warnings.warn(
+            "boti could not detect a project root and all candidate paths are at the "
+            "filesystem root. Falling back to the home directory. "
+            "This is almost certainly wrong — add a project root marker.",
+            UserWarning,
+            stacklevel=2,
+        )
         return Path.home().resolve()
 
     @staticmethod
