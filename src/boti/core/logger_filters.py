@@ -21,9 +21,15 @@ class PIISecretFilter(logging.Filter):
     _REDACTED_MESSAGE = "[REDACTED SENSITIVE DATA]"
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if self._contains_sensitive_data(record.msg) or self._contains_sensitive_data(record.args):
+        if self._contains_sensitive_data(record.msg):
+            # The format string itself contains a sensitive keyword — redact entirely
+            # so that no information about the message structure leaks.
             record.msg = self._REDACTED_MESSAGE
             record.args = ()
+        elif record.args:
+            # Redact only the argument values while preserving the format string so
+            # that log context (e.g. "credential=%s") survives for debugging.
+            record.args = self._redact_args(record.args)
 
         for key in list(record.__dict__.keys()):
             if str(key).lower() in self._SENSITIVE_KEYS:
@@ -32,6 +38,22 @@ class PIISecretFilter(logging.Filter):
                 record.__dict__[key] = self._redact_value(record.__dict__[key])
 
         return True
+
+    def _redact_args(self, args: Any) -> Any:
+        """Redact sensitive values from positional or keyword format arguments."""
+        if isinstance(args, tuple):
+            return tuple(
+                "[REDACTED]" if self._contains_sensitive_data(arg) else self._redact_value(arg)
+                for arg in args
+            )
+        if isinstance(args, dict):
+            return {
+                k: "[REDACTED]"
+                if (str(k).lower() in self._SENSITIVE_KEYS or self._contains_sensitive_data(v))
+                else self._redact_value(v)
+                for k, v in args.items()
+            }
+        return args
 
     def _redact_value(self, value: Any, visited: dict[int, Any] | None = None) -> Any:
         if visited is None:
