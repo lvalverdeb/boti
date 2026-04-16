@@ -1,9 +1,23 @@
 [project]
 name = "boti"
-version = "0.1.0"
+version = "1.0.0"
 description = "Core infrastructure for the Boti ecosystem"
 readme = "README.md"
+license = {text = "MIT"}
 requires-python = ">=3.13"
+authors = [
+    {name="Luis Valverde",email = "lvalverdeb@users.noreply.github.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
     "fsspec>=2026.3.0",
     "pyarrow>=23.0.1",
@@ -11,13 +25,16 @@ dependencies = [
     "pydantic-settings>=2.13.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/lvalverdeb/boti"
+Repository = "https://github.com/lvalverdeb/boti"
+Documentation = "https://github.com/lvalverdeb/boti#readme"
+"Bug Tracker" = "https://github.com/lvalverdeb/boti/issues"
+
 [project.scripts]
 boti = "boti.main:main"
 
 [project.optional-dependencies]
-data = [
-    "boti-data>=0.1.0,<0.2.0",
-]
 
 [build-system]
 requires = ["setuptools>=80", "wheel"]
@@ -27,6 +44,9 @@ build-backend = "setuptools.build_meta"
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+    "mypy>=1.14.0",
 ]
 
 [tool.setuptools]
@@ -38,3 +58,32 @@ include-package-data = false
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["boti", "boti.core*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning:sqlite3",
+]
+
+[tool.coverage.run]
+source = ["src/boti"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = ["B008"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+exclude = ["tests/", "examples/"]

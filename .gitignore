@@ -10,3 +10,15 @@ wheels/
 logs/
 .env
 .env.local
+.pypirc
+*.whl
+*.tar.gz
+.claude/
+.github/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
+.coverage
+.pytest_cache/
+.DS_Store
+__pypackages__/
