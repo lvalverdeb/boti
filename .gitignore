@@ -22,3 +22,4 @@ logs/
 .pytest_cache/
 .DS_Store
 __pypackages__/
+uv.lock

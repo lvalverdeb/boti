@@ -6,6 +6,7 @@ Run examples from the repository root with:
 python examples/simple_resource.py
 python examples/async_resource.py
 python examples/filesystem_resource.py
+python examples/filesystem_supported_backends.py
 python examples/secure_resource.py
 python examples/logger.py
 python examples/project_environment.py

@@ -455,3 +455,133 @@ def test_filesystem_adapter_accepts_retry_params():
     # Verify it still works end-to-end.
     fs = adapter.get_filesystem()
     assert fs is not None
+
+
+# ---------------------------------------------------------------------------
+# S3 compatibility layer (local mapping wrapper)
+# ---------------------------------------------------------------------------
+
+
+def test_create_filesystem_s3_compat_moves_timeouts_to_config_kwargs(monkeypatch: pytest.MonkeyPatch):
+    """S3 creation path remaps misplaced timeout keys for s3fs compatibility."""
+    captured: dict[str, object] = {}
+
+    def fake_filesystem(protocol: str, **kwargs: object) -> object:
+        captured["protocol"] = protocol
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("boti.core.filesystem.fsspec.filesystem", fake_filesystem)
+
+    config = FilesystemConfig(fs_type="s3", fs_path="bucket")
+    create_filesystem(config)
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert captured["protocol"] == "s3"
+    assert kwargs["config_kwargs"]["connect_timeout"] == 10.0
+    assert kwargs["config_kwargs"]["read_timeout"] == 30.0
+
+
+def test_create_filesystem_s3_compat_accepts_alias_credentials(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_filesystem(protocol: str, **kwargs: object) -> object:
+        captured["protocol"] = protocol
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("boti.core.filesystem.fsspec.filesystem", fake_filesystem)
+
+    config = FilesystemConfig(
+        fs_type="s3",
+        fs_path="bucket/prefix",
+        fs_options={
+            "access_key": "AKID",
+            "secret_key": "SECRET",
+            "session_token": "TOKEN",
+            "endpoint_override": "https://minio.local",
+            "region": "us-east-1",
+        },
+    )
+    create_filesystem(config)
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert captured["protocol"] == "s3"
+    assert kwargs["key"] == "AKID"
+    assert kwargs["secret"] == "SECRET"
+    assert kwargs["token"] == "TOKEN"
+    assert kwargs["client_kwargs"]["endpoint_url"] == "https://minio.local"
+    assert kwargs["client_kwargs"]["region_name"] == "us-east-1"
+
+
+def test_create_filesystem_s3_compat_moves_verify_into_client_kwargs(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_filesystem(protocol: str, **kwargs: object) -> object:
+        captured["protocol"] = protocol
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("boti.core.filesystem.fsspec.filesystem", fake_filesystem)
+
+    config = FilesystemConfig(fs_type="s3", fs_path="bucket", fs_verify_ssl=False)
+    create_filesystem(config)
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert captured["protocol"] == "s3"
+    assert "verify" not in kwargs
+    assert kwargs["client_kwargs"]["verify"] is False
+
+
+def test_create_filesystem_s3_compat_uses_verify_ssl_alias(monkeypatch: pytest.MonkeyPatch):
+    captured: dict[str, object] = {}
+
+    def fake_filesystem(protocol: str, **kwargs: object) -> object:
+        captured["protocol"] = protocol
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("boti.core.filesystem.fsspec.filesystem", fake_filesystem)
+
+    config = FilesystemConfig(
+        fs_type="s3",
+        fs_path="bucket",
+        fs_options={"verify_ssl": False},
+    )
+    create_filesystem(config)
+
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert captured["protocol"] == "s3"
+    assert "verify_ssl" not in kwargs
+    assert "verify" not in kwargs
+    assert kwargs["client_kwargs"]["verify"] is False
+
+
+def test_pyarrow_s3_kwargs_compat_uses_aliases_from_fs_options():
+    from boti.core.filesystem import _pyarrow_s3_kwargs_with_compat
+
+    config = FilesystemConfig(
+        fs_type="s3",
+        fs_path="bucket/prefix",
+        fs_options={
+            "access_key": "AKID",
+            "secret_key": "SECRET",
+            "session_token": "TOKEN",
+            "endpoint_override": "https://minio.local",
+            "region": "eu-west-1",
+        },
+    )
+
+    kwargs = _pyarrow_s3_kwargs_with_compat(config)
+    assert kwargs["access_key"] == "AKID"
+    assert kwargs["secret_key"] == "SECRET"
+    assert kwargs["session_token"] == "TOKEN"
+    assert kwargs["region"] == "eu-west-1"
+    assert kwargs["endpoint_override"] == "https://minio.local"
+    assert kwargs["scheme"] == "https"
+
+

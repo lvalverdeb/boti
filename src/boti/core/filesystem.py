@@ -169,7 +169,7 @@ class FilesystemConfig(BaseModel):
 
 def create_filesystem(config: FilesystemConfig) -> fsspec.AbstractFileSystem:
     """Build a concrete fsspec filesystem instance from typed config."""
-    return fsspec.filesystem(config.fs_type, **config.to_fsspec_options())
+    return fsspec.filesystem(config.fs_type, **_filesystem_options_with_compat(config))
 
 
 # Transient error types that are safe to retry across all backends.
@@ -178,6 +178,93 @@ _RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     TimeoutError,
     ConnectionError,
 )
+
+
+def _normalize_s3_fsspec_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Normalize S3 option aliases so downstream callers can pass legacy/new keys."""
+    normalized = dict(options)
+
+    alias_pairs = (
+        ("access_key", "key"),
+        ("secret_key", "secret"),
+        ("session_token", "token"),
+    )
+    for source, target in alias_pairs:
+        if target not in normalized and source in normalized:
+            normalized[target] = normalized[source]
+
+    verify_value = normalized.get("verify")
+    if "verify_ssl" in normalized:
+        verify_value = normalized.get("verify_ssl")
+
+    client_kwargs: dict[str, Any] = dict(normalized.get("client_kwargs", {}))
+    if "endpoint_url" not in client_kwargs:
+        endpoint = normalized.get("endpoint_override") or normalized.get("endpoint")
+        if endpoint is not None:
+            client_kwargs["endpoint_url"] = endpoint
+    if "region_name" not in client_kwargs:
+        region = normalized.get("region")
+        if region is not None:
+            client_kwargs["region_name"] = region
+    # s3fs 2026.3.0 may forward unknown top-level kwargs to AioSession,
+    # which does not accept "verify". Keep SSL verification in client kwargs.
+    if verify_value is not None and "verify" not in client_kwargs:
+        client_kwargs["verify"] = verify_value
+
+    config_kwargs: dict[str, Any] = dict(normalized.get("config_kwargs", {}))
+    # Some external adapters incorrectly place botocore timeouts in client_kwargs.
+    for timeout_key in ("connect_timeout", "read_timeout"):
+        if timeout_key not in config_kwargs and timeout_key in client_kwargs:
+            config_kwargs[timeout_key] = client_kwargs.pop(timeout_key)
+
+    if client_kwargs:
+        normalized["client_kwargs"] = client_kwargs
+    else:
+        normalized.pop("client_kwargs", None)
+
+    if config_kwargs:
+        normalized["config_kwargs"] = config_kwargs
+    else:
+        normalized.pop("config_kwargs", None)
+
+    normalized.pop("verify", None)
+    normalized.pop("verify_ssl", None)
+
+    return normalized
+
+
+def _filesystem_options_with_compat(config: FilesystemConfig) -> dict[str, Any]:
+    options = config.to_fsspec_options()
+    if config.fs_type in {"s3", "s3a"}:
+        return _normalize_s3_fsspec_options(options)
+    return options
+
+
+def _pyarrow_s3_kwargs_with_compat(config: FilesystemConfig) -> dict[str, Any]:
+    normalized = _normalize_s3_fsspec_options(config.to_fsspec_options())
+    client_kwargs = dict(normalized.get("client_kwargs", {}))
+
+    access_key = config.fs_key or normalized.get("key")
+    secret_key = None if config.fs_secret is None else config.fs_secret.get_secret_value()
+    if secret_key is None:
+        secret_key = normalized.get("secret")
+    session_token = None if config.fs_token is None else config.fs_token.get_secret_value()
+    if session_token is None:
+        session_token = normalized.get("token")
+
+    region = config.fs_region or client_kwargs.get("region_name")
+    endpoint_override = config.fs_endpoint or client_kwargs.get("endpoint_url")
+
+    arrow_kwargs: dict[str, Any] = {
+        "access_key": access_key,
+        "secret_key": secret_key,
+        "session_token": session_token,
+        "region": region,
+    }
+    if endpoint_override:
+        arrow_kwargs["endpoint_override"] = endpoint_override
+        arrow_kwargs["scheme"] = "https" if endpoint_override.startswith("https://") else "http"
+    return {k: v for k, v in arrow_kwargs.items() if v is not None}
 
 
 def _with_retry(
@@ -211,7 +298,7 @@ def _with_retry(
                 break
             delay = base_delay * (2 ** (attempt - 1))
             _logger.warning(
-                "boti.filesystem: %s failed (attempt %d/%d): %s — retrying in %.1fs",
+                "boti.filesystem: %s failed (attempt %d/%d): %s -- retrying in %.1fs",
                 label,
                 attempt,
                 max_attempts,
@@ -285,17 +372,7 @@ class FilesystemAdapter:
                 return self._arrow_fs, self._arrow_base_path
 
             if self.config.fs_type == "s3":
-                arrow_kwargs: dict[str, Any] = {
-                    "access_key": self.config.fs_key,
-                    "secret_key": None if self.config.fs_secret is None else self.config.fs_secret.get_secret_value(),
-                    "session_token": None if self.config.fs_token is None else self.config.fs_token.get_secret_value(),
-                    "region": self.config.fs_region,
-                }
-                if self.config.fs_endpoint:
-                    arrow_kwargs["endpoint_override"] = self.config.fs_endpoint
-                    arrow_kwargs["scheme"] = "https" if self.config.fs_endpoint.startswith("https://") else "http"
-
-                self._arrow_fs = pafs.S3FileSystem(**{k: v for k, v in arrow_kwargs.items() if v is not None})
+                self._arrow_fs = pafs.S3FileSystem(**_pyarrow_s3_kwargs_with_compat(self.config))
                 self._arrow_base_path = self.storage_path.replace("s3://", "", 1)
                 return self._arrow_fs, self._arrow_base_path
 

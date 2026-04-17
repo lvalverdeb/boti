@@ -1,6 +1,6 @@
 [project]
 name = "boti"
-version = "1.0.0"
+version = "1.0.1"
 description = "Core infrastructure for the Boti ecosystem"
 readme = "README.md"
 license = {text = "MIT"}
@@ -20,9 +20,11 @@ classifiers = [
 ]
 dependencies = [
     "fsspec>=2026.3.0",
+    "ipykernel>=7.2.0",
     "pyarrow>=23.0.1",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
+    "s3fs>=2026.3.0",
 ]
 
 [project.urls]
