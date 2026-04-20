@@ -585,3 +585,53 @@ def test_pyarrow_s3_kwargs_compat_uses_aliases_from_fs_options():
     assert kwargs["scheme"] == "https"
 
 
+# ---------------------------------------------------------------------------
+# SSRF — fs_endpoint validation (security regression)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://169.254.169.254/latest/meta-data",   # AWS IMDS
+        "http://169.254.169.254",                    # bare IMDS
+        "http://127.0.0.1:9000",                     # loopback
+        "http://192.168.1.100:9000",                 # RFC-1918
+        "http://10.0.0.5",                           # RFC-1918
+        "http://172.16.0.1",                         # RFC-1918
+    ],
+)
+def test_filesystem_config_rejects_private_ip_endpoints(endpoint):
+    """Private/reserved IP endpoints must be rejected to prevent SSRF."""
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type="s3", fs_path="my-bucket", fs_endpoint=endpoint)
+
+
+def test_filesystem_config_rejects_non_http_endpoint_scheme():
+    with pytest.raises(ValueError, match="scheme"):
+        FilesystemConfig(fs_type="s3", fs_path="my-bucket", fs_endpoint="file:///etc/passwd")
+
+
+def test_filesystem_config_accepts_public_https_endpoint():
+    config = FilesystemConfig(
+        fs_type="s3", fs_path="my-bucket", fs_endpoint="https://s3.amazonaws.com"
+    )
+    assert config.fs_endpoint == "https://s3.amazonaws.com"
+
+
+def test_filesystem_config_accepts_allowlisted_private_endpoint():
+    import boti.core.filesystem as fs_module
+    original = fs_module.ENDPOINT_ALLOWLIST
+    try:
+        fs_module.ENDPOINT_ALLOWLIST = frozenset({"minio.internal:9000"})
+        # Should NOT raise even though it resolves to a private name
+        # (allowlist bypasses hostname check; IP check still requires allowlist)
+        # Use a hostname rather than a bare IP so the allowlist key matches
+        config = FilesystemConfig(
+            fs_type="s3",
+            fs_path="my-bucket",
+            fs_endpoint="http://minio.internal:9000",
+        )
+        assert "minio.internal" in config.fs_endpoint
+    finally:
+        fs_module.ENDPOINT_ALLOWLIST = original

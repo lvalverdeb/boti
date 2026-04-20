@@ -4,11 +4,13 @@ Typed filesystem configuration and runtime adapters.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar
+from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
@@ -54,6 +56,32 @@ _ALLOWED_FS_TYPES: frozenset[str] = frozenset({
     "hdfs",
 })
 
+# RFC-1918 and link-local ranges that must not be reachable via fs_endpoint
+# unless explicitly whitelisted by the operator.
+_PRIVATE_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),   # link-local / AWS IMDS
+    ipaddress.ip_network("127.0.0.0/8"),      # loopback
+    ipaddress.ip_network("::1/128"),          # IPv6 loopback
+    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
+)
+
+# Operator-configurable allowlist for storage endpoints.  Populate at startup
+# (e.g. ``ENDPOINT_ALLOWLIST |= {"minio.internal:9000"}``) to permit specific
+# internal endpoints that would otherwise be blocked by the private-IP guard.
+ENDPOINT_ALLOWLIST: frozenset[str] = frozenset()
+
+
+def _is_private_ip(hostname: str) -> bool:
+    """Return True if *hostname* resolves to a private/reserved IP address."""
+    try:
+        addr = ipaddress.ip_address(hostname)
+        return any(addr in network for network in _PRIVATE_NETWORKS)
+    except ValueError:
+        return False
+
 
 class FilesystemConfig(BaseModel):
     """Typed configuration for local and remote filesystem profiles."""
@@ -94,6 +122,35 @@ class FilesystemConfig(BaseModel):
     ) -> "FilesystemConfig":
         settings = load_prefixed_model(FilesystemSettings, prefix, env_file=env_file)
         return cls.from_settings(settings, **overrides)
+
+    @field_validator("fs_endpoint")
+    @classmethod
+    def validate_fs_endpoint(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        parsed = urlparse(stripped)
+
+        # Require an explicit http/https scheme to block file://, ftp://, etc.
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(
+                f"fs_endpoint scheme '{parsed.scheme}' is not allowed. "
+                "Only 'http' and 'https' endpoints are supported."
+            )
+
+        hostname = parsed.hostname or ""
+        # Build the host:port key used for allowlist lookup
+        allowlist_key = f"{hostname}:{parsed.port}" if parsed.port else hostname
+
+        if allowlist_key not in ENDPOINT_ALLOWLIST and hostname not in ENDPOINT_ALLOWLIST:
+            if _is_private_ip(hostname):
+                raise ValueError(
+                    f"fs_endpoint '{stripped}' resolves to a private or reserved IP address "
+                    f"({hostname}) which is blocked to prevent SSRF attacks. "
+                    "Add the host to boti.core.filesystem.ENDPOINT_ALLOWLIST if this is intentional."
+                )
+
+        return stripped
 
     @field_validator("fs_type")
     @classmethod

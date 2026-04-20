@@ -1,6 +1,6 @@
 [project]
 name = "boti"
-version = "1.0.1"
+version = "1.0.2"
 description = "Core infrastructure for the Boti ecosystem"
 readme = "README.md"
 license = {text = "MIT"}

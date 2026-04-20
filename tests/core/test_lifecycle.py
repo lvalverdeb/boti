@@ -3,6 +3,7 @@ Tests for ManagedResource lifecycle (sync and async).
 """
 import asyncio
 import pickle
+import warnings
 from types import SimpleNamespace
 
 import fsspec
@@ -184,3 +185,23 @@ def test_managed_resource_pickle_strips_runtime_only_logger_and_fs_factory():
         res.close()
         if restored is not None and not restored.closed:
             restored.close()
+
+
+def test_trusted_unpickle_active_emits_startup_warning():
+    """SECURITY: instantiating a ManagedResource while trusted-unpickle mode is active
+    must emit a loud RuntimeWarning so operators never miss the setting."""
+    with ManagedResource.trusted_unpickle_scope():
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = SimpleResource()
+            try:
+                security_warnings = [
+                    w for w in caught if issubclass(w.category, RuntimeWarning)
+                    and "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE" in str(w.message)
+                ]
+                assert security_warnings, (
+                    "Expected a RuntimeWarning about BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE "
+                    "but none was emitted."
+                )
+            finally:
+                res.close()

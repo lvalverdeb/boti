@@ -65,6 +65,7 @@ class ManagedResource(abc.ABC):
         self._aclose_lock = asyncio.Lock()
         self._configure_logger()
         self._attach_finalizer()
+        self._warn_if_trusted_unpickle_active()
 
     def _configure_logger(self) -> None:
         """Restore the configured logger or create a default one for runtime use."""
@@ -117,6 +118,27 @@ class ManagedResource(abc.ABC):
     def _trusted_unpickle_enabled(cls) -> bool:
         value = os.environ.get(cls._TRUSTED_UNPICKLE_ENV, "")
         return value.lower() in {"1", "true", "yes"}
+
+    def _warn_if_trusted_unpickle_active(self) -> None:
+        """Emit a loud warning at resource initialization if the trusted-unpickle env var is set.
+
+        This env var enables ManagedResource deserialization for distributed workflows.
+        Accidentally enabling it in a public-facing service would allow RCE via a crafted
+        pickle payload.  The warning makes the active mode visible in every log.
+        """
+        if self._trusted_unpickle_enabled():
+            msg = (
+                f"[SECURITY] {self.__class__.__name__}: "
+                f"{self._TRUSTED_UNPICKLE_ENV} is ENABLED on this process. "
+                "Trusted-unpickle mode allows ManagedResource deserialization. "
+                "Ensure this process is only accessible from trusted internal workers — "
+                "never expose it to public or untrusted networks."
+            )
+            warnings.warn(msg, RuntimeWarning, stacklevel=4)
+            try:
+                self.logger.warning(msg)
+            except Exception:
+                pass
 
     def __getstate__(self) -> dict[str, Any]:
         """Drop runtime-only state so subclasses remain pickleable."""
