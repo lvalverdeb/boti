@@ -163,7 +163,7 @@ def main() -> None:
             ("default_logger() cache hits",     N_RECORDS,          lambda: bench_cache_hits(tmp)),
         ]
 
-        print(f"Logger end-to-end load profile\n")
+        print("Logger end-to-end load profile\n")
         for label, n, fn in scenarios:
             t0 = time.perf_counter()
             fn()

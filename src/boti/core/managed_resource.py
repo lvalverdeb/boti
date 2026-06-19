@@ -6,19 +6,22 @@ initialization, cleanup, and context management across the toolkit.
 """
 
 from __future__ import annotations
+
 import abc
 import asyncio
 import contextlib
 import os
 import pickle
 import threading
-import weakref
 import warnings
-from typing import Any, Callable, Optional, Self, final
+import weakref
+from collections.abc import Callable
+from typing import Any, Self, final
 
 __all__ = ["ManagedResource"]
 
 import fsspec
+
 from boti.core.logger import Logger
 from boti.core.models import ResourceConfig
 from boti.core.project import ProjectService
@@ -33,13 +36,16 @@ class ManagedResource(abc.ABC):
     """
 
     _TRUSTED_UNPICKLE_ENV = "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE"
+    # Thread-local storage for trusted_unpickle_scope so the scope is
+    # confined to the calling thread and does not bleed into sibling threads.
+    _thread_local: threading.local = threading.local()
 
     def __init__(
         self,
-        config: Optional[ResourceConfig] = None,
+        config: ResourceConfig | None = None,
         *,
-        fs: Optional[fsspec.AbstractFileSystem] = None,
-        fs_factory: Optional[Callable[[], fsspec.AbstractFileSystem]] = None,
+        fs: fsspec.AbstractFileSystem | None = None,
+        fs_factory: Callable[[], fsspec.AbstractFileSystem] | None = None,
         **config_overrides: Any,
     ) -> None:
         if config is None:
@@ -103,19 +109,26 @@ class ManagedResource(abc.ABC):
     @classmethod
     @contextlib.contextmanager
     def trusted_unpickle_scope(cls) -> Any:
-        """Temporarily enable ManagedResource unpickling for trusted runtimes."""
-        previous = os.environ.get(cls._TRUSTED_UNPICKLE_ENV)
-        os.environ[cls._TRUSTED_UNPICKLE_ENV] = "1"
+        """Temporarily enable ManagedResource unpickling for the current thread only.
+
+        Uses thread-local state so that concurrent threads are not affected.
+        The process-wide environment variable ``BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE``
+        remains supported for worker processes that enable it at startup, but
+        ``trusted_unpickle_scope`` no longer mutates ``os.environ``.
+        """
+        previous = getattr(cls._thread_local, "trusted_unpickle", False)
+        cls._thread_local.trusted_unpickle = True
         try:
             yield
         finally:
-            if previous is None:
-                os.environ.pop(cls._TRUSTED_UNPICKLE_ENV, None)
-            else:
-                os.environ[cls._TRUSTED_UNPICKLE_ENV] = previous
+            cls._thread_local.trusted_unpickle = previous
 
     @classmethod
     def _trusted_unpickle_enabled(cls) -> bool:
+        # Thread-local scope takes precedence; fall back to the process-wide env var
+        # for worker processes that set it globally at startup.
+        if getattr(cls._thread_local, "trusted_unpickle", False):
+            return True
         value = os.environ.get(cls._TRUSTED_UNPICKLE_ENV, "")
         return value.lower() in {"1", "true", "yes"}
 
@@ -163,9 +176,7 @@ class ManagedResource(abc.ABC):
             if self._is_pickleable_state(state):
                 return state
 
-        if state.get("_owns_fs"):
-            state["fs"] = None
-        elif state.get("fs") is not None:
+        if state.get("_owns_fs") or state.get("fs") is not None:
             state["fs"] = None
         if self._is_pickleable_state(state):
             return state
@@ -241,7 +252,7 @@ class ManagedResource(abc.ABC):
             if self._is_closed or self._closing:
                 raise RuntimeError(f"{self.__class__.__name__} is closed")
 
-    def _ensure_fs(self) -> Optional[fsspec.AbstractFileSystem]:
+    def _ensure_fs(self) -> fsspec.AbstractFileSystem | None:
         """Lazy-loads the filesystem if a factory is provided."""
         with self._state_lock:
             self._assert_open()

@@ -8,8 +8,9 @@ import ipaddress
 import logging
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar
+from typing import Any, TypeVar
 from urllib.parse import urlparse
 
 _logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ __all__ = [
     "FilesystemConfig",
     "FilesystemAdapter",
     "create_filesystem",
+    "add_endpoint_to_allowlist",
 ]
 
 import fsspec
@@ -62,20 +64,61 @@ _PRIVATE_NETWORKS: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...] = (
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),   # link-local / AWS IMDS
-    ipaddress.ip_network("127.0.0.0/8"),      # loopback
-    ipaddress.ip_network("::1/128"),          # IPv6 loopback
-    ipaddress.ip_network("fe80::/10"),        # IPv6 link-local
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local / AWS IMDS
+    ipaddress.ip_network("127.0.0.0/8"),  # loopback
+    ipaddress.ip_network("::1/128"),  # IPv6 loopback
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
 )
 
-# Operator-configurable allowlist for storage endpoints.  Populate at startup
-# (e.g. ``ENDPOINT_ALLOWLIST |= {"minio.internal:9000"}``) to permit specific
-# internal endpoints that would otherwise be blocked by the private-IP guard.
-ENDPOINT_ALLOWLIST: frozenset[str] = frozenset()
+# Operator-configurable allowlist for storage endpoints.  Use
+# ``add_endpoint_to_allowlist("minio.internal:9000")`` at startup to permit
+# specific internal endpoints that would otherwise be blocked by the private-IP
+# guard.  Do NOT mutate this set directly from multiple threads.
+ENDPOINT_ALLOWLIST: set[str] = set()
+
+
+def add_endpoint_to_allowlist(*hosts: str) -> None:
+    """Add one or more host[:port] strings to the endpoint allowlist.
+
+    Call this once at application startup before any ``FilesystemConfig`` is
+    constructed.  Thread-safe for read-after-write scenarios where callers only
+    add entries before the first config validation.
+
+    Example::
+
+        from boti.core.filesystem import add_endpoint_to_allowlist
+        add_endpoint_to_allowlist("minio.internal:9000", "minio.internal")
+    """
+    for host in hosts:
+        ENDPOINT_ALLOWLIST.add(host.strip())
+
+
+# Reserved hostnames that must be blocked regardless of IP resolution.
+# Covers loopback aliases and common cloud-metadata service names.
+_RESERVED_HOSTNAMES: frozenset[str] = frozenset({
+    "localhost",
+    "ip6-localhost",
+    "ip6-loopback",
+    "broadcasthost",
+    # Cloud metadata services (reachable by name in some environments)
+    "metadata",
+    "metadata.google.internal",
+    "169.254.169.254",  # literal string form as well
+})
 
 
 def _is_private_ip(hostname: str) -> bool:
-    """Return True if *hostname* resolves to a private/reserved IP address."""
+    """Return True if *hostname* is a private/reserved IP address or a blocked hostname.
+
+    Checks both literal IP strings (e.g. ``169.254.169.254``) and reserved DNS
+    names (e.g. ``localhost``).  Hostnames that are not literal IPs and not in
+    the reserved-hostname list return False — DNS resolution is intentionally
+    avoided here to prevent slow validation and to keep the check deterministic.
+    External hostname-based SSRF (e.g. via nip.io) is the operator's
+    responsibility to prevent via network egress controls.
+    """
+    if hostname.lower() in _RESERVED_HOSTNAMES:
+        return True
     try:
         addr = ipaddress.ip_address(hostname)
         return any(addr in network for network in _PRIVATE_NETWORKS)
@@ -90,42 +133,42 @@ class FilesystemConfig(BaseModel):
 
     fs_type: str = Field(default="file")
     fs_path: str = Field(..., min_length=1)
-    fs_key: Optional[str] = Field(default=None)
-    fs_secret: Optional[SecretStr] = Field(default=None)
-    fs_endpoint: Optional[str] = Field(default=None)
-    fs_token: Optional[SecretStr] = Field(default=None)
-    fs_region: Optional[str] = Field(default=None)
+    fs_key: str | None = Field(default=None)
+    fs_secret: SecretStr | None = Field(default=None)
+    fs_endpoint: str | None = Field(default=None)
+    fs_token: SecretStr | None = Field(default=None)
+    fs_region: str | None = Field(default=None)
     fs_verify_ssl: bool = Field(default=True)
-    fs_connect_timeout: Optional[float] = Field(
+    fs_connect_timeout: float | None = Field(
         default=10.0,
         description="TCP connect timeout in seconds for remote backends. None disables the timeout.",
     )
-    fs_read_timeout: Optional[float] = Field(
+    fs_read_timeout: float | None = Field(
         default=30.0,
         description="Socket read timeout in seconds for remote backends. None disables the timeout.",
     )
     fs_options: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def from_settings(cls, settings: FilesystemSettings, **overrides: Any) -> "FilesystemConfig":
+    def from_settings(cls, settings: FilesystemSettings, **overrides: Any) -> FilesystemConfig:
         payload = settings.model_dump(exclude_none=True)
         payload.update(overrides)
         return cls(**payload)
 
     @classmethod
     def from_env_prefix(
-        cls,
-        prefix: str,
-        *,
-        env_file: Optional[str | Path] = None,
-        **overrides: Any,
-    ) -> "FilesystemConfig":
+            cls,
+            prefix: str,
+            *,
+            env_file: str | Path | None = None,
+            **overrides: Any,
+    ) -> FilesystemConfig:
         settings = load_prefixed_model(FilesystemSettings, prefix, env_file=env_file)
         return cls.from_settings(settings, **overrides)
 
     @field_validator("fs_endpoint")
     @classmethod
-    def validate_fs_endpoint(cls, value: Optional[str]) -> Optional[str]:
+    def validate_fs_endpoint(cls, value: str | None) -> str | None:
         if value is None:
             return None
         stripped = value.strip()
@@ -181,6 +224,14 @@ class FilesystemConfig(BaseModel):
         return self.fs_path
 
     def to_fsspec_options(self) -> dict[str, Any]:
+        """Build a kwargs dict suitable for ``fsspec.filesystem(fs_type, **options)``.
+
+        .. warning::
+            The returned dict contains **plaintext credentials** (``secret``,
+            ``token``) unwrapped from their ``SecretStr`` wrappers.  Never log,
+            repr, or otherwise expose the return value of this method.  Pass it
+            directly to fsspec and let it go out of scope immediately.
+        """
         options = dict(self.fs_options)
 
         if self.fs_type in {"s3", "s3a"}:
@@ -325,11 +376,11 @@ def _pyarrow_s3_kwargs_with_compat(config: FilesystemConfig) -> dict[str, Any]:
 
 
 def _with_retry(
-    fn: Callable[[], _T],
-    *,
-    max_attempts: int = 3,
-    base_delay: float = 0.5,
-    label: str = "operation",
+        fn: Callable[[], _T],
+        *,
+        max_attempts: int = 3,
+        base_delay: float = 0.5,
+        label: str = "operation",
 ) -> _T:
     """Call *fn* with exponential back-off on transient errors.
 
@@ -380,19 +431,19 @@ class FilesystemAdapter:
     """
 
     def __init__(
-        self,
-        config: FilesystemConfig,
-        *,
-        max_attempts: int = 3,
-        retry_base_delay: float = 0.5,
+            self,
+            config: FilesystemConfig,
+            *,
+            max_attempts: int = 3,
+            retry_base_delay: float = 0.5,
     ) -> None:
         self.config = config
         self._max_attempts = max_attempts
         self._retry_base_delay = retry_base_delay
         self._lock = threading.RLock()
-        self._fs: Optional[fsspec.AbstractFileSystem] = None
-        self._arrow_fs: Optional[pafs.FileSystem] = None
-        self._arrow_base_path: Optional[str] = None
+        self._fs: fsspec.AbstractFileSystem | None = None
+        self._arrow_fs: pafs.FileSystem | None = None
+        self._arrow_base_path: str | None = None
 
     @property
     def storage_path(self) -> str:

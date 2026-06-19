@@ -6,6 +6,7 @@ PII redaction, and optional asynchronous queue-based handlers.
 """
 
 from __future__ import annotations
+
 import logging
 import os
 import sys
@@ -14,7 +15,7 @@ import warnings
 from collections import OrderedDict
 from logging.handlers import QueueHandler
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 __all__ = ["Logger"]
 
@@ -36,7 +37,7 @@ class Logger:
     # Including log_level prevents a cached instance silently ignoring level changes.
     # Capped at 256 entries to avoid unbounded file-descriptor growth in long-running apps.
     _MAX_CACHE_SIZE = 256
-    _default_logger_cache: OrderedDict[tuple[Path, str, str, int], "Logger"] = OrderedDict()
+    _default_logger_cache: OrderedDict[tuple[Path, str, str, int], Logger] = OrderedDict()
     _default_logger_lock = threading.RLock()
 
     DEBUG = logging.DEBUG
@@ -67,11 +68,11 @@ class Logger:
     @classmethod
     def default_logger(
         cls,
-        log_dir: Union[str, Path] = "logs",
-        logger_name: Optional[str] = None,
-        log_file: Optional[str] = None,
+        log_dir: str | Path = "logs",
+        logger_name: str | None = None,
+        log_file: str | None = None,
         log_level: int = logging.INFO,
-        base_dir: Optional[Union[str, Path]] = None,
+        base_dir: str | Path | None = None,
     ) -> Logger:
         """
         Factory method for quick instantiation with sensible defaults.
@@ -111,9 +112,9 @@ class Logger:
 
     @staticmethod
     def _resolve_log_dir(
-        log_dir: Union[str, Path],
+        log_dir: str | Path,
         *,
-        base_dir: Optional[Union[str, Path]] = None,
+        base_dir: str | Path | None = None,
     ) -> Path:
         path = Path(log_dir).expanduser()
         if path.is_absolute():

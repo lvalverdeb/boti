@@ -7,11 +7,12 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, Optional, TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, Field, SecretStr, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource
+
 from boti.core.security import validate_environment_bindings
 
 __all__ = [
@@ -59,10 +60,10 @@ def _validate_env_prefix(prefix: str) -> str:
 
 
 def load_prefixed_model(
-    model_cls: type[TModel],
-    prefix: str,
+        model_cls: type[TModel],
+        prefix: str,
     *,
-    env_file: Optional[Path | str] = None,
+        env_file: Path | str | None = None,
 ) -> TModel:
     """Load a typed model from environment variables using an explicit prefix."""
     normalized_prefix = _validate_env_prefix(prefix)
@@ -105,9 +106,9 @@ class SqlDatabaseSettings(BaseSettings):
         extra="ignore",
     )
 
-    connection_url: Optional[SecretStr] = Field(default=None)
+    connection_url: SecretStr | None = Field(default=None)
     query_only: bool = Field(default=True)
-    worker_connection_env_var: Optional[str] = Field(default=None)
+    worker_connection_env_var: str | None = Field(default=None)
     pool_size: int = Field(default=5, ge=0)
     max_overflow: int = Field(default=10, ge=0)
     pool_timeout: int = Field(default=30, ge=0)
@@ -122,10 +123,10 @@ class FilesystemSettings(BaseModel):
 
     fs_type: str = Field(default="file")
     fs_path: str = Field(..., min_length=1)
-    fs_key: Optional[str] = Field(default=None)
-    fs_secret: Optional[SecretStr] = Field(default=None)
-    fs_endpoint: Optional[str] = Field(default=None)
-    fs_token: Optional[SecretStr] = Field(default=None)
-    fs_region: Optional[str] = Field(default=None)
+    fs_key: str | None = Field(default=None)
+    fs_secret: SecretStr | None = Field(default=None)
+    fs_endpoint: str | None = Field(default=None)
+    fs_token: SecretStr | None = Field(default=None)
+    fs_region: str | None = Field(default=None)
     fs_verify_ssl: bool = Field(default=True)
     fs_options: dict[str, Any] = Field(default_factory=dict)

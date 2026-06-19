@@ -6,13 +6,14 @@ ensuring that toolkit operations are context-aware.
 """
 
 from __future__ import annotations
+
 import inspect
 import os
 import warnings
 from pathlib import Path
 
 __all__ = ["ProjectService"]
-from typing import Iterable, Optional, Union
+from collections.abc import Iterable
 
 from boti.core.security import is_secure_path
 from boti.core.settings import load_dotenv_values
@@ -38,9 +39,9 @@ class ProjectService:
 
     @staticmethod
     def detect_project_root(
-        start_path: Optional[Union[str, Path]] = None,
+        start_path: str | Path | None = None,
         *,
-        markers: Optional[Iterable[Union[str, Path]]] = None,
+        markers: Iterable[str | Path] | None = None,
     ) -> Path:
         """
         Heuristic to find the project root by looking for common markers.
@@ -90,7 +91,7 @@ class ProjectService:
     @staticmethod
     def _candidate_search_paths() -> Iterable[Path]:
         seen: set[Path] = set()
-        raw_candidates: list[Union[str, Path]] = [os.getcwd()]
+        raw_candidates: list[str | Path] = [os.getcwd()]
 
         pwd = os.environ.get("PWD")
         if pwd:
@@ -98,8 +99,22 @@ class ProjectService:
 
         for frame in inspect.stack()[1:8]:
             filename = getattr(frame, "filename", None)
-            if filename and not filename.startswith("<"):
-                raw_candidates.append(filename)
+            if not filename:
+                continue
+            # Skip synthetic filenames: anything starting with "<" (e.g. "<string>",
+            # "<stdin>", "<frozen ...>"), IPython cells, and exec'd code.
+            if filename.startswith("<"):
+                continue
+            if filename.startswith("ipykernel_") or "/ipykernel/" in filename:
+                continue
+            # Require the path to exist on disk before using it as a search anchor.
+            try:
+                p = Path(filename)
+                if not p.exists():
+                    continue
+            except (ValueError, OSError):
+                continue
+            raw_candidates.append(filename)
 
         for raw_candidate in raw_candidates:
             candidate = ProjectService._normalize_search_path(raw_candidate)
@@ -108,19 +123,19 @@ class ProjectService:
                 yield candidate
 
     @staticmethod
-    def _normalize_search_path(path: Union[str, Path]) -> Path:
+    def _normalize_search_path(path: str | Path) -> Path:
         candidate = Path(path).expanduser().resolve()
         return candidate.parent if candidate.is_file() else candidate
 
     @staticmethod
     def _resolve_relative_markers(
-        markers: Optional[Iterable[Union[str, Path]]],
+        markers: Iterable[str | Path] | None,
     ) -> tuple[Path, ...]:
         resolved = markers if markers is not None else ProjectService.DEFAULT_ROOT_MARKERS
         return tuple(Path(marker) for marker in resolved)
 
     @staticmethod
-    def _search_ancestors(start: Path, *, markers: Iterable[Path]) -> Optional[Path]:
+    def _search_ancestors(start: Path, *, markers: Iterable[Path]) -> Path | None:
         for curr in [start] + list(start.parents):
             candidate_markers = [curr / marker for marker in markers]
             if any(marker.exists() for marker in candidate_markers):
@@ -131,9 +146,9 @@ class ProjectService:
     @staticmethod
     def setup_environment(
         project_root: Path,
-        env_file: Optional[Union[str, Path]] = None,
+        env_file: str | Path | None = None,
         *,
-        candidate_files: Optional[Iterable[Union[str, Path]]] = None,
+        candidate_files: Iterable[str | Path] | None = None,
     ) -> Path:
         """
         Loads environment variables from a .env file into os.environ.

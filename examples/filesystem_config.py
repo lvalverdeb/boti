@@ -18,7 +18,6 @@ from pathlib import Path
 
 from boti.core.filesystem import FilesystemAdapter, FilesystemConfig, create_filesystem
 
-
 # ---------------------------------------------------------------------------
 # 1. Local file access
 # ---------------------------------------------------------------------------

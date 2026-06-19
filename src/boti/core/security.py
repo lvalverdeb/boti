@@ -6,9 +6,10 @@ and identifier validation for secure code generation.
 """
 
 from __future__ import annotations
+
 import re
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Iterable, Mapping, Union
 
 __all__ = [
     "is_secure_path",
@@ -19,7 +20,7 @@ __all__ = [
 ]
 
 
-def is_secure_path(target_file: Union[str, Path], allowed_dirs: Iterable[Union[str, Path]]) -> bool:
+def is_secure_path(target_file: str | Path, allowed_dirs: Iterable[str | Path]) -> bool:
     """
     Verifies if a target path resides within an allowed sandbox directory.
     
@@ -98,6 +99,10 @@ def validate_environment_bindings(bindings: Mapping[str, str]) -> dict[str, str]
         if "\n" in value or "\r" in value:
             raise ValueError(
                 f"Environment variable '{key}' must not contain newline characters."
+            )
+        if "\t" in value:
+            raise ValueError(
+                f"Environment variable '{key}' must not contain tab characters."
             )
         validated[key] = value
     return validated

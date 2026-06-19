@@ -1,17 +1,17 @@
 """
 Tests for ManagedResource lifecycle (sync and async).
 """
-import asyncio
 import pickle
 import warnings
 from types import SimpleNamespace
 
 import fsspec
 import pytest
+from pydantic import ValidationError
+
 from boti.core import ManagedResource
 from boti.core import project as project_module
 from boti.core.models import ResourceConfig
-from pydantic import ValidationError
 
 
 class SimpleResource(ManagedResource):

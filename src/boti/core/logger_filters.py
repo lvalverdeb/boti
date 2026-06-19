@@ -1,15 +1,40 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Mapping
+import re
+from collections.abc import Mapping
+from typing import Any
 
 __all__ = ["PIISecretFilter"]
 
+# Matches sensitive data patterns in strings:
+# 1. Explicit assignments:  ``key=value`` or ``key: value``
+# 2. Inline description:    ``key is: value``, ``key is value``, ``key is 'value'``
+# A plain word like "access_key" in "Loaded access_key from env" does NOT match
+# because there is no value following it.
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(?:password|passwd|secret|token|api_key|access_key|auth_token|authorization|bearer)"
+    r"(?:\s+is\s*[=:]?\s*|\s*[=:]\s*)\S+"
+)
+
 
 class PIISecretFilter(logging.Filter):
-    """Redact obvious secrets and sensitive fields from log records."""
+    """Redact secrets from log records without suppressing innocent messages.
 
-    _SENSITIVE_KEYS = {
+    Strategy:
+    - Format string (``record.msg``): redacted only when it contains an
+      explicit key=value, key: value, or "key is: value" pattern for a
+      sensitive keyword.  Plain mentions like "loaded access_key from env"
+      are preserved so operational log messages remain useful.
+    - Positional args: each string arg is inspected for sensitive assignment
+      patterns and redacted if found.
+    - Keyword args (dict): values for sensitive keys are always redacted;
+      other values are recursively inspected.
+    - Structured extra fields on the log record: deep-traversed and redacted
+      by key name (sensitive keys) or by value (sensitive assignment patterns).
+    """
+
+    _SENSITIVE_KEYS: frozenset[str] = frozenset({
         "password",
         "passwd",
         "secret",
@@ -19,21 +44,30 @@ class PIISecretFilter(logging.Filter):
         "auth_token",
         "authorization",
         "bearer",
-    }
+    })
     _REDACTED_MESSAGE = "[REDACTED SENSITIVE DATA]"
 
+    # Attributes that are part of LogRecord's standard schema — never redacted
+    # as "extra" fields even if their names happen to match a sensitive keyword.
+    _LOGRECORD_STDLIB_ATTRS: frozenset[str] = frozenset({
+        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
+        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
+        "created", "msecs", "relativeCreated", "thread", "threadName",
+        "processName", "process", "message", "taskName",
+    })
+
     def filter(self, record: logging.LogRecord) -> bool:
-        if self._contains_sensitive_data(record.msg):
-            # The format string itself contains a sensitive keyword — redact entirely
-            # so that no information about the message structure leaks.
+        if isinstance(record.msg, str) and _SENSITIVE_ASSIGNMENT_RE.search(record.msg):
             record.msg = self._REDACTED_MESSAGE
             record.args = ()
         elif record.args:
-            # Redact only the argument values while preserving the format string so
-            # that log context (e.g. "credential=%s") survives for debugging.
             record.args = self._redact_args(record.args)
 
+        # Deep-redact structured extra fields added via ``logging.info(..., extra={...})``
+        # but leave standard LogRecord attributes alone.
         for key in list(record.__dict__.keys()):
+            if key in self._LOGRECORD_STDLIB_ATTRS:
+                continue
             if str(key).lower() in self._SENSITIVE_KEYS:
                 record.__dict__[key] = "[REDACTED]"
             else:
@@ -44,14 +78,10 @@ class PIISecretFilter(logging.Filter):
     def _redact_args(self, args: Any) -> Any:
         """Redact sensitive values from positional or keyword format arguments."""
         if isinstance(args, tuple):
-            return tuple(
-                "[REDACTED]" if self._contains_sensitive_data(arg) else self._redact_value(arg)
-                for arg in args
-            )
+            return tuple(self._redact_value(arg) for arg in args)
         if isinstance(args, dict):
             return {
-                k: "[REDACTED]"
-                if (str(k).lower() in self._SENSITIVE_KEYS or self._contains_sensitive_data(v))
+                k: "[REDACTED]" if str(k).lower() in self._SENSITIVE_KEYS
                 else self._redact_value(v)
                 for k, v in args.items()
             }
@@ -65,7 +95,7 @@ class PIISecretFilter(logging.Filter):
             return None
 
         if isinstance(value, str):
-            return "[REDACTED]" if self._contains_sensitive_data(value) else value
+            return "[REDACTED]" if _SENSITIVE_ASSIGNMENT_RE.search(value) else value
 
         value_id = id(value)
         if value_id in visited:
@@ -105,30 +135,3 @@ class PIISecretFilter(logging.Filter):
             return redacted_frozenset
 
         return value
-
-    def _contains_sensitive_data(self, value: Any, visited: set[int] | None = None) -> bool:
-        if visited is None:
-            visited = set()
-
-        if id(value) in visited:
-            return False
-
-        visited.add(id(value))
-
-        if value is None:
-            return False
-
-        if isinstance(value, str):
-            lowered = value.lower()
-            return any(marker in lowered for marker in self._SENSITIVE_KEYS)
-
-        if isinstance(value, Mapping):
-            return any(
-                self._contains_sensitive_data(key, visited) or self._contains_sensitive_data(item, visited)
-                for key, item in value.items()
-            )
-
-        if isinstance(value, tuple | list | set | frozenset):
-            return any(self._contains_sensitive_data(item, visited) for item in value)
-
-        return False

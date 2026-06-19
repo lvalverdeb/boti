@@ -6,10 +6,11 @@ to prevent path traversal attacks during file operations.
 """
 
 from __future__ import annotations
+
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 __all__ = ["SecureResource"]
 
@@ -28,7 +29,7 @@ class SecureResource(ManagedResource):
     prevent path traversal.
     """
     
-    def __init__(self, config: Optional[ResourceConfig] = None, **kwargs: Any) -> None:
+    def __init__(self, config: ResourceConfig | None = None, **kwargs: Any) -> None:
         """
         Initialize the SecureResource.
         Sets the project root for sandboxing context.
@@ -41,15 +42,16 @@ class SecureResource(ManagedResource):
 
         configured_allowed_paths: list[Path] = []
         for raw in self.config.extra_allowed_paths:
-            resolved = Path(raw).resolve()
-            if resolved.is_symlink():
-                warnings.warn(
-                    f"extra_allowed_path is a symlink and may not provide the intended "
-                    f"sandbox boundary: {raw!r}",
-                    UserWarning,
-                    stacklevel=2,
+            unresolved = Path(raw)
+            # Check for symlink BEFORE resolving — Path.resolve() follows symlinks
+            # so is_symlink() on the result is always False.
+            if unresolved.is_symlink():
+                raise ValueError(
+                    f"extra_allowed_path must not be a symlink — it could silently widen "
+                    f"the sandbox boundary to an unintended location: {raw!r}"
                 )
-            elif not resolved.exists():
+            resolved = unresolved.resolve()
+            if not resolved.exists():
                 warnings.warn(
                     f"extra_allowed_path does not exist and will have no effect: {raw!r}",
                     UserWarning,
@@ -63,7 +65,7 @@ class SecureResource(ManagedResource):
             if candidate not in self.allowed_paths:
                 self.allowed_paths.append(candidate)
 
-    def get_secure_path(self, path: Union[str, Path]) -> Path:
+    def get_secure_path(self, path: str | Path) -> Path:
         """
         Validates and resolves a path within the configured sandbox roots.
         
@@ -87,7 +89,7 @@ class SecureResource(ManagedResource):
             )
         return resolved
 
-    def open_secure(self, path: Union[str, Path], mode: str = "r", **kwargs: Any):
+    def open_secure(self, path: str | Path, mode: str = "r", **kwargs: Any):
         """
         Opens a file securely, enforcing sandbox constraints.
         
@@ -102,12 +104,12 @@ class SecureResource(ManagedResource):
         secure_path = self.get_secure_path(path)
         return open(secure_path, mode, **kwargs)
 
-    def write_text_secure(self, path: Union[str, Path], content: str, encoding: str = "utf-8") -> None:
+    def write_text_secure(self, path: str | Path, content: str, encoding: str = "utf-8") -> None:
         """Writes text content to a file securely."""
         secure_path = self.get_secure_path(path)
         secure_path.write_text(content, encoding=encoding)
 
-    def read_text_secure(self, path: Union[str, Path], encoding: str = "utf-8") -> str:
+    def read_text_secure(self, path: str | Path, encoding: str = "utf-8") -> str:
         """Reads text content from a file securely."""
         secure_path = self.get_secure_path(path)
         return secure_path.read_text(encoding=encoding)

@@ -3,10 +3,11 @@ Tests for the non-blocking Logger and PII redaction.
 """
 import logging
 import os
-import time
 import threading
-from pathlib import Path
+import time
+
 import pytest
+
 from boti.core import Logger
 from boti.core import logger as logger_module
 from boti.core.logger import PIISecretFilter

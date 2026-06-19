@@ -3,11 +3,12 @@ Tests for security and path sandboxing.
 """
 import os
 import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pathlib import Path
-from boti.core import SecureResource, ProjectService
+
+from boti.core import ProjectService, SecureResource
 from boti.core import project as project_module
 from boti.core.models import ResourceConfig
 

@@ -478,5 +478,5 @@ Enable `allow_pickle` only when you control both ends of the serialization chann
 Run tests with the project interpreter:
 
 ```bash
-PYTHONPATH=src python -m pytest -q
+uv run pytest
 ```
