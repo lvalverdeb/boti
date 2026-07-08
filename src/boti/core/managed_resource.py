@@ -7,7 +7,6 @@ initialization, cleanup, and context management across the toolkit.
 
 from __future__ import annotations
 
-import abc
 import asyncio
 import contextlib
 import os
@@ -27,9 +26,9 @@ from boti.core.models import ResourceConfig
 from boti.core.project import ProjectService
 
 
-class ManagedResource(abc.ABC):
+class ManagedResource:
     """
-    Base class for resources requiring standardized lifecycle management.
+    Lifecycle management base class for resources.
     
     Handles both synchronous and asynchronous cleanup, logging integration,
     thread-safe state management, and provides a consistent context manager interface.
@@ -59,6 +58,7 @@ class ManagedResource(abc.ABC):
         self.config = config
         self.verbose = config.verbose
         self.debug = config.debug
+        self._skip_logger = config.skip_logger
         self._is_closed = False
         self._closing = False
 
@@ -75,13 +75,19 @@ class ManagedResource(abc.ABC):
 
     def _configure_logger(self) -> None:
         """Restore the configured logger or create a default one for runtime use."""
+        if self._skip_logger:
+            self.logger = None
+            return
         if self.config.logger is None:
             log_base_dir = self.config.project_root or ProjectService.detect_project_root()
             self.logger = Logger.default_logger(
                 logger_name=self.__class__.__name__,
                 base_dir=log_base_dir,
             )
-            level = Logger.DEBUG if self.debug else (Logger.INFO if self.verbose else Logger.WARNING)
+            level = (
+                Logger.DEBUG if self.debug
+                else (Logger.INFO if self.verbose else Logger.WARNING)
+            )
             self.logger.set_level(level)
         else:
             self.logger = self.config.logger
@@ -148,10 +154,9 @@ class ManagedResource(abc.ABC):
                 "never expose it to public or untrusted networks."
             )
             warnings.warn(msg, RuntimeWarning, stacklevel=4)
-            try:
-                self.logger.warning(msg)
-            except Exception:
-                pass
+            if self.logger is not None:
+                with contextlib.suppress(Exception):
+                    self.logger.warning(msg)
 
     def __getstate__(self) -> dict[str, Any]:
         """Drop runtime-only state so subclasses remain pickleable."""
@@ -161,7 +166,13 @@ class ManagedResource(abc.ABC):
                 "Set allow_pickle=True only for trusted distributed workflows."
             )
 
-        state = self.__dict__.copy()
+        try:
+            state = self.__dict__.copy()
+        except AttributeError:
+            raise TypeError(
+                f"Cannot pickle {self.__class__.__name__}: subclasses using __slots__ "
+                "must override __getstate__/__setstate__."
+            ) from None
         state.pop("_state_lock", None)
         state.pop("_aclose_lock", None)
         state.pop("_finalizer", None)
@@ -242,6 +253,11 @@ class ManagedResource(abc.ABC):
         """Synchronous cleanup hook for subclasses. Override to release non-async resources."""
         pass
 
+    def _release_fs(self) -> None:
+        """Drop the owned filesystem reference. Runs in close()/aclose() after _cleanup()."""
+        if self._owns_fs:
+            self.fs = None
+
     async def _acleanup(self) -> None:
         """Asynchronous cleanup hook for subclasses. Override to release async resources."""
         pass
@@ -263,7 +279,10 @@ class ManagedResource(abc.ABC):
             
             fs_new = self._fs_factory()
             if not isinstance(fs_new, fsspec.AbstractFileSystem):
-                raise TypeError(f"fs_factory() must return fsspec.AbstractFileSystem, got {type(fs_new)!r}")
+                raise TypeError(
+                    f"fs_factory() must return fsspec.AbstractFileSystem, "
+                    f"got {type(fs_new)!r}"
+                )
             self.fs = fs_new
             return self.fs
 
@@ -274,17 +293,18 @@ class ManagedResource(abc.ABC):
                 raise RuntimeError(f"{self.__class__.__name__} is closed")
         fs = self._ensure_fs()
         if fs is None:
-            raise RuntimeError(f"{self.__class__.__name__}: filesystem is required but not configured")
+            raise RuntimeError(
+                f"{self.__class__.__name__}: "
+                "filesystem is required but not configured"
+            )
         return fs
 
     def _detach_finalizer(self) -> None:
         """Safely detaches the GC finalizer to prevent duplicate warnings."""
         finalizer = getattr(self, "_finalizer", None)
         if finalizer is not None and finalizer.alive:
-            try:
+            with contextlib.suppress(Exception):
                 finalizer.detach()
-            except Exception:
-                pass
 
     @final
     def close(self, *, suppress_errors: bool = False) -> None:
@@ -302,13 +322,18 @@ class ManagedResource(abc.ABC):
         try:
             self._cleanup()
         except Exception:
-            self.logger.error(f"Error during {self.__class__.__name__}._cleanup()", exc_info=self.debug)
+            if self.logger is not None:
+                self.logger.error(
+                    f"Error during {self.__class__.__name__}._cleanup()",
+                    exc_info=self.debug,
+                )
             if not suppress_errors:
                 raise
         finally:
             with self._state_lock:
                 self._is_closed = True
                 self._closing = False
+            self._release_fs()
             self._detach_finalizer()
 
     async def aclose(self, *, suppress_errors: bool = False) -> None:
@@ -331,13 +356,18 @@ class ManagedResource(abc.ABC):
                 else:
                     await asyncio.to_thread(self._cleanup)
             except Exception:
-                self.logger.error(f"Error during {self.__class__.__name__}._acleanup()", exc_info=self.debug)
+                if self.logger is not None:
+                    self.logger.error(
+                        f"Error during {self.__class__.__name__}._acleanup()",
+                        exc_info=self.debug,
+                    )
                 if not suppress_errors:
                     raise
             finally:
                 with self._state_lock:
                     self._is_closed = True
                     self._closing = False
+                self._release_fs()
                 self._detach_finalizer()
 
     @final

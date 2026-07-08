@@ -7,6 +7,7 @@ PII redaction, and optional asynchronous queue-based handlers.
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import sys
@@ -25,6 +26,8 @@ from boti.core.logger_handlers import SafeRotatingFileHandler
 from boti.core.logger_runtime import LoggerRuntime
 from boti.core.models import LoggerConfig
 from boti.core.project import ProjectService
+
+_LogExtra = dict[str, Any] | None
 
 
 class Logger:
@@ -63,6 +66,7 @@ class Logger:
         self._core.setLevel(self.log_level)
         self._core.propagate = False
 
+        self._extra: dict[str, Any] = {}
         self._setup_handlers()
 
     @classmethod
@@ -120,27 +124,45 @@ class Logger:
         if path.is_absolute():
             return path.resolve()
 
-        anchor = Path(base_dir).resolve() if base_dir is not None else ProjectService.detect_project_root()
+        anchor = (
+            Path(base_dir).resolve()
+            if base_dir is not None
+            else ProjectService.detect_project_root()
+        )
         return (anchor / path).resolve()
 
     def set_level(self, level: int) -> None:
         """Update the logging level."""
         self._core.setLevel(level)
 
+    def _log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        extra: _LogExtra = kwargs.pop("extra", None)
+        merged_extra = {**self._extra, **(extra or {})}
+        kwargs.setdefault("stacklevel", 3)
+        if merged_extra:
+            logging.LoggerAdapter(self._core, merged_extra).log(level, msg, *args, **kwargs)
+        else:
+            self._core.log(level, msg, *args, **kwargs)
+
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._core.log(logging.DEBUG, msg, *args, **kwargs)
+        self._log(logging.DEBUG, msg, *args, **kwargs)
 
     def info(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._core.log(logging.INFO, msg, *args, **kwargs)
+        self._log(logging.INFO, msg, *args, **kwargs)
 
     def warning(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._core.log(logging.WARNING, msg, *args, **kwargs)
+        self._log(logging.WARNING, msg, *args, **kwargs)
 
     def error(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._core.log(logging.ERROR, msg, *args, **kwargs)
+        self._log(logging.ERROR, msg, *args, **kwargs)
 
     def critical(self, msg: str, *args: Any, **kwargs: Any) -> None:
-        self._core.log(logging.CRITICAL, msg, *args, **kwargs)
+        self._log(logging.CRITICAL, msg, *args, **kwargs)
+
+    def bind(self, **extra: Any) -> Logger:
+        obj = copy.copy(self)
+        obj._extra = {**self._extra, **extra}
+        return obj
 
     def _setup_handlers(self) -> None:
         """
@@ -223,5 +245,5 @@ class Logger:
         except FileExistsError:
             # File exists, check if it's securely structured and not a planted symlink.
             if path.is_symlink():
-                raise ValueError(f"log_file must not be a symlink: {path}")
+                raise ValueError(f"log_file must not be a symlink: {path}") from None
             cls._restrict_permissions(path, 0o600)

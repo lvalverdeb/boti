@@ -13,7 +13,6 @@ logs/
 .pypirc
 *.whl
 *.tar.gz
-.claude/
 .github/
 .ruff_cache/
 .mypy_cache/

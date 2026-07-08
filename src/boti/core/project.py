@@ -59,7 +59,10 @@ class ProjectService:
         resolved_markers = ProjectService._resolve_relative_markers(markers)
         if start_path is not None:
             candidate = ProjectService._normalize_search_path(start_path)
-            return ProjectService._search_ancestors(candidate, markers=resolved_markers) or candidate
+            return (
+                ProjectService._search_ancestors(candidate, markers=resolved_markers)
+                or candidate
+            )
 
         candidates = list(ProjectService._candidate_search_paths())
         for candidate in candidates:
@@ -156,7 +159,8 @@ class ProjectService:
         Args:
             project_root: The root of the project.
             env_file: Optional explicit path to an env file.
-            candidate_files: Optional relative candidate env paths to probe when env_file is omitted.
+            candidate_files: Optional relative candidate env paths
+                to probe when env_file is omitted.
 
         Returns:
             Path: The path to the environment file used.

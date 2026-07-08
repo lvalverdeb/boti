@@ -14,16 +14,23 @@ class LoggerRuntime:
 
     _lock = threading.RLock()
     _attached_keys: set[tuple[str, str]] = set()
-    _log_queue: Queue[logging.LogRecord] = Queue(-1)
+    _log_queue: Queue[logging.LogRecord] | None = None
     _listener: QueueListener | None = None
     _atexit_registered: bool = False
+
+    @classmethod
+    def _ensure_queue(cls) -> Queue[logging.LogRecord]:
+        if cls._log_queue is None:
+            cls._log_queue = Queue(-1)
+        return cls._log_queue
 
     @classmethod
     def ensure_listener(cls) -> None:
         with cls._lock:
             if cls._listener is not None:
                 return
-            cls._listener = QueueListener(cls._log_queue, respect_handler_level=True)
+            queue = cls._ensure_queue()
+            cls._listener = QueueListener(queue, respect_handler_level=True)
             cls._listener.start()
             if not cls._atexit_registered:
                 atexit.register(cls.stop_listener)

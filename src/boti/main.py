@@ -1,7 +1,8 @@
 """
 Main entry point for the Boti CLI.
 
-Boti (Base Object Transformation Interface) is a framework designed to facilitate the transformation of data objects across various formats and structures.
+Boti (Base Object Transformation Interface) is a framework designed to facilitate
+the transformation of data objects across various formats and structures.
 
 All public interfaces follow Google Style Docstrings.
 """

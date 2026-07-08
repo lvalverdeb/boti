@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from pydantic import BaseModel, Field, SecretStr, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,7 +22,6 @@ __all__ = [
     "SqlDatabaseSettings",
 ]
 
-TModel = TypeVar("TModel", bound=BaseModel)
 _ENV_PREFIX_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*_?$")
 
 
@@ -54,12 +53,13 @@ def _validate_env_prefix(prefix: str) -> str:
     normalized = prefix.strip()
     if not normalized or not _ENV_PREFIX_PATTERN.fullmatch(normalized):
         raise ValueError(
-            "Environment prefixes must match [A-Za-z_][A-Za-z0-9_]* and may end with a single underscore."
+            "Environment prefixes must match [A-Za-z_][A-Za-z0-9_]* "
+            "and may end with a single underscore."
         )
     return normalized
 
 
-def load_prefixed_model(
+def load_prefixed_model[TModel: BaseModel](
         model_cls: type[TModel],
         prefix: str,
     *,
@@ -71,7 +71,9 @@ def load_prefixed_model(
     merged_bindings: dict[str, str] = {}
     if env_file is not None:
         merged_bindings.update(load_dotenv_values(Path(env_file)))
-    merged_bindings.update({key: value for key, value in os.environ.items() if isinstance(value, str)})
+    merged_bindings.update(
+        {key: value for key, value in os.environ.items() if isinstance(value, str)}
+    )
 
     payload: dict[str, Any] = {}
     for field_name, field in model_cls.model_fields.items():

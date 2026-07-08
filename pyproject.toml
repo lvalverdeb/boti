@@ -1,7 +1,7 @@
 [project]
 name = "boti"
 version = "1.0.2"
-description = "Core infrastructure for the Boti ecosystem"
+description = "Runtime primitives for reliable Python data pipelines, secure file access, and notebook-to-production workflows"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"

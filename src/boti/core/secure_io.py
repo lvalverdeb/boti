@@ -80,10 +80,11 @@ class SecureResource(ManagedResource):
         """
         resolved = Path(path).resolve()
         if not is_secure_path(resolved, self.allowed_paths):
-            self.logger.error(
-                f"SECURITY VIOLATION: Path traversal attempt detected. "
-                f"Target: {path} (resolved: {resolved}), Allowed Roots: {self.allowed_paths}"
-            )
+            if self.logger is not None:
+                self.logger.error(
+                    f"SECURITY VIOLATION: Path traversal attempt detected. "
+                    f"Target: {path} (resolved: {resolved}), Allowed Roots: {self.allowed_paths}"
+                )
             raise PermissionError(
                 f"Access denied: Path {path} is outside the configured sandbox roots."
             )

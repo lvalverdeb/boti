@@ -10,11 +10,16 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 from urllib.parse import urlparse
 
+import fsspec
+import pyarrow.fs as pafs
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+
+from boti.core.settings import FilesystemSettings, load_prefixed_model
+
 _logger = logging.getLogger(__name__)
-_T = TypeVar("_T")
 
 __all__ = [
     "FilesystemConfig",
@@ -22,12 +27,6 @@ __all__ = [
     "create_filesystem",
     "add_endpoint_to_allowlist",
 ]
-
-import fsspec
-import pyarrow.fs as pafs
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
-
-from boti.core.settings import FilesystemSettings, load_prefixed_model
 
 # Explicit allowlist of fsspec backend identifiers that are safe to instantiate
 # from user-supplied or environment-backed configuration.  Arbitrary backends
@@ -141,11 +140,17 @@ class FilesystemConfig(BaseModel):
     fs_verify_ssl: bool = Field(default=True)
     fs_connect_timeout: float | None = Field(
         default=10.0,
-        description="TCP connect timeout in seconds for remote backends. None disables the timeout.",
+        description=(
+            "TCP connect timeout in seconds for remote backends. "
+            "None disables the timeout."
+        ),
     )
     fs_read_timeout: float | None = Field(
         default=30.0,
-        description="Socket read timeout in seconds for remote backends. None disables the timeout.",
+        description=(
+            "Socket read timeout in seconds for remote backends. "
+            "None disables the timeout."
+        ),
     )
     fs_options: dict[str, Any] = Field(default_factory=dict)
 
@@ -185,13 +190,17 @@ class FilesystemConfig(BaseModel):
         # Build the host:port key used for allowlist lookup
         allowlist_key = f"{hostname}:{parsed.port}" if parsed.port else hostname
 
-        if allowlist_key not in ENDPOINT_ALLOWLIST and hostname not in ENDPOINT_ALLOWLIST:
-            if _is_private_ip(hostname):
-                raise ValueError(
-                    f"fs_endpoint '{stripped}' resolves to a private or reserved IP address "
-                    f"({hostname}) which is blocked to prevent SSRF attacks. "
-                    "Add the host to boti.core.filesystem.ENDPOINT_ALLOWLIST if this is intentional."
-                )
+        if (
+            allowlist_key not in ENDPOINT_ALLOWLIST
+            and hostname not in ENDPOINT_ALLOWLIST
+            and _is_private_ip(hostname)
+        ):
+            raise ValueError(
+                f"fs_endpoint '{stripped}' resolves to a private or reserved IP address "
+                f"({hostname}) which is blocked to prevent SSRF attacks. "
+                "Add the host to boti.core.filesystem.ENDPOINT_ALLOWLIST "
+                "if this is intentional."
+            )
 
         return stripped
 
@@ -375,13 +384,13 @@ def _pyarrow_s3_kwargs_with_compat(config: FilesystemConfig) -> dict[str, Any]:
     return {k: v for k, v in arrow_kwargs.items() if v is not None}
 
 
-def _with_retry(
-        fn: Callable[[], _T],
+def _with_retry[T](
+        fn: Callable[[], T],
         *,
         max_attempts: int = 3,
         base_delay: float = 0.5,
         label: str = "operation",
-) -> _T:
+) -> T:
     """Call *fn* with exponential back-off on transient errors.
 
     Args:

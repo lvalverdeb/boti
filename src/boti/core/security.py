@@ -90,7 +90,8 @@ def validate_environment_bindings(bindings: Mapping[str, str]) -> dict[str, str]
             raise ValueError("Environment variable names must not contain NUL bytes.")
         if not is_valid_env_var_name(key):
             raise ValueError(
-                f"Invalid environment variable name '{key}'. Names must match [A-Za-z_][A-Za-z0-9_]*."
+                f"Invalid environment variable name '{key}'. "
+                "Names must match [A-Za-z_][A-Za-z0-9_]*."
             )
         if "\x00" in value:
             raise ValueError(

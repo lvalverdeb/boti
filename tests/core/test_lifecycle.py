@@ -1,7 +1,9 @@
 """
 Tests for ManagedResource lifecycle (sync and async).
 """
+import gc
 import pickle
+import threading
 import warnings
 from types import SimpleNamespace
 
@@ -168,6 +170,42 @@ def test_managed_resource_pickle_strips_runtime_only_logger_and_fs_factory():
         def __init__(self) -> None:
             import threading
 
+
+def test_skip_logger_does_not_create_logger():
+    """Verify skip_logger=True prevents logger creation."""
+    res = SimpleResource(config=ResourceConfig(skip_logger=True))
+    try:
+        assert res.logger is None, "Expected logger to be None when skip_logger=True"
+        # close should not crash despite no logger
+        res.close()
+        assert res.closed
+    finally:
+        if not res.closed:
+            res.close()
+
+
+def test_skip_logger_stress_with_fs():
+    """Stress test with skip_logger to verify no logger-related crashes."""
+    N = 500
+    resources = []
+    for _ in range(N):
+        r = SimpleResource(
+            config=ResourceConfig(skip_logger=True),
+            fs_factory=lambda: fsspec.filesystem("memory"),
+        )
+        r.require_fs()
+        resources.append(r)
+    for r in resources:
+        r.close()
+        assert r.fs is None
+    assert all(r.closed for r in resources)
+
+
+def test_managed_resource_pickle_strips_runtime_only_logger_and_fs_factory():
+    class UnpickleableLogger:
+        def __init__(self) -> None:
+            import threading
+
             self._lock = threading.Lock()
 
     res = SimpleResource(
@@ -205,3 +243,160 @@ def test_trusted_unpickle_active_emits_startup_warning():
                 )
             finally:
                 res.close()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests for mass-subclassing scenarios
+# ---------------------------------------------------------------------------
+
+def test_fs_cleanup_on_close():
+    """Verify that _cleanup() releases the owned filesystem on close()."""
+    res = SimpleResource(fs_factory=lambda: fsspec.filesystem("memory"))
+    res.require_fs()
+    assert res.fs is not None
+    res.close()
+    assert res.fs is None
+
+
+def test_fs_cleanup_on_context_exit():
+    """Verify that context manager exit releases the owned filesystem."""
+    with SimpleResource(fs_factory=lambda: fsspec.filesystem("memory")) as res:
+        res.require_fs()
+        assert res.fs is not None
+    assert res.fs is None
+
+
+def test_fs_cleanup_when_lazy_not_loaded():
+    """Verify _cleanup() handles the case where fs was never materialized."""
+    res = SimpleResource(fs_factory=lambda: fsspec.filesystem("memory"))
+    assert res.fs is None
+    res.close()
+    assert res.fs is None
+
+
+def test_managed_resource_stress_create_destroy():
+    """Create and destroy many instances to exercise cache eviction and locks."""
+    N = 2000
+    resources = [SimpleResource() for _ in range(N)]
+    for r in resources:
+        r.close()
+    assert all(r.closed for r in resources)
+
+
+def test_managed_resource_stress_create_destroy_with_fs():
+    """Stress test with fs_factory to exercise the new cleanup path."""
+    N = 2000
+    resources = []
+    for _ in range(N):
+        r = SimpleResource(fs_factory=lambda: fsspec.filesystem("memory"))
+        r.require_fs()
+        resources.append(r)
+    for r in resources:
+        r.close()
+        assert r.fs is None
+    assert all(r.closed for r in resources)
+
+
+def test_concurrent_lifecycle():
+    """Multiple threads creating and closing resources simultaneously."""
+    errors: list[Exception] = []
+    lock = threading.Lock()
+
+    def worker(n: int) -> None:
+        try:
+            for _ in range(n):
+                with SimpleResource() as r:
+                    assert not r.closed
+                assert r.closed
+        except Exception as e:
+            with lock:
+                errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(100,)) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Concurrent lifecycle raised: {errors}"
+
+
+def test_concurrent_pickle_roundtrip():
+    """Multiple threads pickling and unpickling resources concurrently."""
+    errors: list[Exception] = []
+    lock = threading.Lock()
+
+    def worker() -> None:
+        try:
+            res = SimpleResource(config=ResourceConfig(allow_pickle=True))
+            try:
+                with ManagedResource.trusted_unpickle_scope():
+                    restored = pickle.loads(pickle.dumps(res))
+                restored.close()
+            finally:
+                res.close()
+        except Exception as e:
+            with lock:
+                errors.append(e)
+
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"Concurrent pickle raised: {errors}"
+
+
+def test_gc_finalizer_fires_when_not_closed():
+    """Verify weakref.finalizer fires when an unclosed resource is GC'd."""
+    res = SimpleResource()
+    finalizer = res._finalizer
+    assert finalizer is not None
+    assert finalizer.alive
+
+    import weakref
+    ref = weakref.ref(res)
+    del res
+    gc.collect()
+    gc.collect()
+
+    assert ref() is None, "Resource was not garbage collected"
+    assert not finalizer.alive, "Finalizer did not fire during GC"
+
+
+def test_cross_thread_trusted_unpickle_scope_isolation():
+    """Verify trusted_unpickle_scope is thread-local and does not leak across threads."""
+    res = SimpleResource(config=ResourceConfig(allow_pickle=True))
+    payload = pickle.dumps(res)
+    res.close()
+
+    results: dict[str, bool] = {}
+
+    def setter() -> None:
+        with ManagedResource.trusted_unpickle_scope():
+            results["setter_active"] = ManagedResource._trusted_unpickle_enabled()
+
+    def checker() -> None:
+        results["checker_active"] = ManagedResource._trusted_unpickle_enabled()
+
+    t1 = threading.Thread(target=setter)
+    t2 = threading.Thread(target=checker)
+    t1.start()
+    t1.join()
+    t2.start()
+    t2.join()
+
+    assert results.get("setter_active") is True
+    assert results.get("checker_active") is False, (
+        "trusted_unpickle_scope leaked across threads"
+    )
+
+    # Also verify the scope works for actual unpickling within one thread
+    with ManagedResource.trusted_unpickle_scope():
+        restored = pickle.loads(payload)
+        assert isinstance(restored, SimpleResource)
+        restored.close()
+
+
+

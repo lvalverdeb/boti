@@ -84,14 +84,26 @@ class ResourceConfig(BaseModel):
     verbose: bool = Field(default=False, description="Enable verbose output.")
     debug: bool = Field(default=False, description="Enable debug output.")
     logger: Any | None = Field(default=None, description="Optional logger instance.")
+    skip_logger: bool = Field(
+        default=False,
+        description=(
+            "Skip automatic logger creation. "
+            "The resource will not have a configured logger."
+        ),
+    )
     allow_pickle: bool = Field(
         default=False,
         description=(
             "Allow trusted pickle serialization for distributed workflows. "
-            "Keep disabled unless both serialization and deserialization happen in trusted runtimes."
+            "Keep disabled unless both serialization and deserialization "
+            "happen in trusted runtimes."
         ),
     )
 
     # Secure specific fields
-    project_root: str | Path | None = Field(default=None, description="Project root for sandboxing.")
-    extra_allowed_paths: list[str | Path] = Field(default_factory=list, description="Additional allowed paths.")
+    project_root: str | Path | None = Field(
+        default=None, description="Project root for sandboxing."
+    )
+    extra_allowed_paths: list[str | Path] = Field(
+        default_factory=list, description="Additional allowed paths."
+    )

@@ -15,17 +15,16 @@ En esencia, `boti` proporciona a tu código de transformación un modelo de ejec
 
 ## Qué problema resuelve `boti`
 
-Mucho código de datos y automatización empieza siendo pequeño y rápidamente se vuelve operativamente caótico:
+Python es el lenguaje dominante para ingeniería de datos, automatización y ML — pero el camino del notebook exploratorio al pipeline de producción está lleno de modos de fallo bien documentados:
 
-- lógica de inicio y cierre improvisada
-- manejo duplicado de rutas y archivos
-- carga de variables de entorno dispersa entre scripts y notebooks
-- logging diagnóstico inconsistente
-- suposiciones frágiles sobre desde dónde se ejecuta el código
+- **Los notebooks no se despliegan.** Los notebooks Jupyter fomentan la ejecución no lineal de celdas, el estado global implícito y la lógica de configuración improvisada. Todo equipo de ciencia de datos se enfrenta al mismo obstáculo: el prototipo funciona, pero el camino a producción no está claro. [Los estudios muestran que una minoría de proyectos de ML llegan a producción](https://mljourney.com/notebook-to-pipeline-taking-ml-from-jupyter-to-production/), y los notebooks en pipelines CI/CD fallan un 40% más a menudo que el código modular.
+- **Las fugas de recursos son la norma.** La sentencia `with` de Python es el estándar de oro, pero en la práctica las bases de código complejas con múltiples tipos de recursos (sistemas de archivos, clientes, conexiones) siguen acumulando abstracciones con fugas.
+- **Las vulnerabilidades de path traversal están activas y sin parche.** Solo en 2025-2026, se divulgaron CVEs críticos de path traversal en MindsDB (CVE-2025-68472), setuptools (CVE-2025-47273), el propio módulo tarfile de Python (CVE-2025-4330) y Werkzeug (CVE-2024-49766). La mayoría de los servicios Python que manejan rutas de archivo no tienen ningún sandbox.
+- **`multiprocessing.Pool` falla en los patrones más simples.** `PicklingError` es la pregunta de multiprocessing más frecuente en StackOverflow. Enviar configuración a procesos worker requiere un control manual del pickle que la mayoría de los equipos hace mal.
+- **La carga de entorno está duplicada en cada script.** La detección de la raíz del proyecto, la carga de `.env` y la configuración específica del entorno se reimplementan de forma improvisada en cada notebook y script — a menudo con diferencias sutiles.
+- **Los pipelines de datos acumulan deuda técnica.** Con el tiempo, la limpieza improvisada, las rutas hardcodeadas y el logging inconsistente convierten pipelines fiables en sistemas frágiles e intocables.
 
-Esto suele llevar a código que funciona en un notebook o una máquina, pero que se vuelve inestable al reutilizarse en pipelines, servicios empaquetados, bibliotecas compartidas o trabajos programados.
-
-`boti` proporciona a esos proyectos un pequeño conjunto de **primitivas de ejecución con opinión** para que el mismo código pueda moverse más limpiamente entre desarrollo local, automatización y flujos de trabajo en producción.
+`boti` proporciona a esos proyectos un pequeño conjunto de **primitivas de ejecución con opinión** para que el mismo código pueda moverse limpiamente entre desarrollo local, automatización y flujos de trabajo en producción sin reinventar la misma infraestructura.
 
 ## Por qué `boti` es útil
 
@@ -39,6 +38,28 @@ Ayuda mediante:
 - un modelo de logging compartido para el código base con `Logger`
 
 Esto es especialmente valioso cuando múltiples equipos o notebooks interactúan con el mismo código base, porque reduce las suposiciones implícitas y hace el comportamiento más predecible.
+
+## Casos de uso reales
+
+### Migración de notebooks a producción
+
+El camino más común a Boti: un equipo tiene notebooks funcionales repartidos entre colaboradores, pero el código se ejecuta de forma diferente en cada máquina. `ManagedResource` proporciona hooks de ciclo de vida deterministas, `ProjectService` ancla cada entorno a la misma raíz del proyecto, y `Logger` ofrece diagnósticos consistentes. El mismo código ahora se ejecuta en un notebook, un pipeline CI/CD y un trabajo por lotes programado — sin cambios.
+
+### Acceso seguro a archivos en servicios multi-tenant
+
+Los servicios que aceptan rutas de archivo de entrada del usuario o APIs externas son una fuente recurrente de CVEs (CVE-2025-68472 en MindsDB, CVE-2025-47273 en setuptools, CVE-2025-4330 en tarfile de Python). `SecureResource` resuelve cada ruta a su forma canónica y rechaza cualquier cosa fuera del sandbox configurado. Esto es defensa en profundidad que detecta bugs de path traversal independientemente de cómo se construyó la ruta.
+
+### Trabajos multiprocesamiento
+
+Enviar configuración de recursos a un worker de `multiprocessing.Pool` es uno de los puntos débiles más comunes de Python. El doble gateo de pickle de Boti (`allow_pickle` en la configuración + variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`) permite serializar un recurso y enviarlo a un worker sin shims manuales de pickle. El hook `_restore_runtime_state` restablece las conexiones transitorias en el lado del worker.
+
+### Pipelines ETL con almacenamiento híbrido local/remoto
+
+Los trabajos ETL que cambian entre archivos locales, S3, GCS y espacio temporal en memoria se benefician de la abstracción `FilesystemConfig` de Boti. Una única configuración tipada controla la conexión, y `ManagedResource._ensure_fs()` proporciona acceso lazy y thread-safe al sistema de archivos bajo demanda.
+
+### Desarrollo de bibliotecas compartidas
+
+Cuando múltiples paquetes internos o equipos dependen de la misma lógica de transformación, Boti impone un contrato consistente: cada recurso se abre y cierra de la misma manera, cada acceso a archivos se valida, cada entorno se descubre desde la misma raíz. Esto elimina el problema de "funciona en mi máquina" a nivel arquitectónico.
 
 ## Paquetes
 
@@ -469,16 +490,61 @@ if __name__ == "__main__":
 
 Activa `allow_pickle` solo cuando controles ambos extremos del canal de serialización. Deserializar datos de fuentes no confiables puede ejecutar código arbitrario. La variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE` es la última línea de defensa: no la establezcas globalmente en entornos que procesen datos de fuentes externas.
 
-## Más documentación específica de paquetes
+## Más documentación
 
-- [`packages/boti/README.md`](packages/boti/README.md)
 - [`examples/`](examples/)
-- [`docs/`](docs/)
+
+  **Ciclo de vida — recursos, limpieza y control de pickle**
+
+  - [`simple_resource.py`](examples/simple_resource.py) — `ManagedResource` mínimo con `_cleanup` síncrono, uso de context-manager, idempotencia de cierre, detección de fugas GC mediante `weakref.finalize` y `_restore_runtime_state()`.
+  - [`filesystem_resource.py`](examples/filesystem_resource.py) — subclase de `ManagedResource` respaldada por un sistema de archivos fsspec. Muestra `require_fs()`, inicialización lazy del sistema de archivos y limpieza.
+  - [`async_resource.py`](examples/async_resource.py) — `ManagedResource` con `_acleanup` nativo para limpieza asíncrona sin fallback síncrono.
+  - [`managed_resource_pickle.py`](examples/managed_resource_pickle.py) — denegación de pickle por defecto, gestor de contexto `trusted_unpickle_scope()`, `_restore_runtime_state()` tras la deserialización y la variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`.
+
+  **Abstracciones del sistema de archivos**
+
+  - [`filesystem_config.py`](examples/filesystem_config.py) — `FilesystemConfig` para backends local, en memoria y compatible con S3 usando `create_filesystem()` y `FilesystemAdapter`.
+  - [`filesystem_from_env.py`](examples/filesystem_from_env.py) — `FilesystemConfig.from_settings()` y `from_env_prefix()` para construir perfiles tipados del sistema de archivos desde variables de entorno o modelos pydantic.
+  - [`filesystem_pyarrow.py`](examples/filesystem_pyarrow.py) — integración PyArrow: `FilesystemAdapter.get_pyarrow_filesystem()`, lectura/escritura de Parquet a través de fsspec y comportamiento de caché del adaptador.
+  - [`filesystem_supported_backends.py`](examples/filesystem_supported_backends.py) — prueba a nivel de constructor para cada backend fsspec que soporta boti. Útil para identificar rápidamente paquetes de drivers opcionales faltantes.
+
+  **Registro (logging)**
+
+  - [`logger.py`](examples/logger.py) — `Logger` con manejo seguro de archivos, redacción de PII (contraseñas, tokens, claves API), logging estructurado, fábrica `default_logger()` con caché LRU y loggers por espacio de nombres.
+  - [`logger_runtime.py`](examples/logger_runtime.py) — listener de fondo `LoggerRuntime`, logging multi-destino (archivo + stderr), `SafeRotatingFileHandler` y apagado graceful.
+
+  **Seguridad — E/S en sandbox y validación**
+
+  - [`secure_resource.py`](examples/secure_resource.py) — sandbox `SecureResource` con `read_text_secure`, `write_text_secure`, `open_secure`, rechazo de path traversal, `extra_allowed_paths` y detección de symlinks.
+  - [`security_extended.py`](examples/security_extended.py) — `validate_environment_bindings()`, `is_valid_env_var_name()`, `is_valid_identifier()`, `is_valid_dotted_identifier()` y casos extremos de `is_secure_path()`.
+
+  **Descubrimiento de proyecto y entorno**
+
+  - [`project_environment.py`](examples/project_environment.py) — `ProjectService.detect_project_root()` y carga de archivos `.env` con `setup_environment()`.
+  - [`project_service_runtime.py`](examples/project_service_runtime.py) — uso de `ProjectService` centrado en tiempo de ejecución: detección de raíz de servicio, carga de un archivo runtime.env y lectura de valores de configuración.
+  - [`settings.py`](examples/settings.py) — modelos de configuración tipados (`SqlDatabaseSettings`, `FilesystemSettings`), `load_prefixed_model()`, `load_dotenv_values()` y precedencia de anulación dotenv vs entorno de proceso.
+
+  **Pipeline integral**
+
+  - [`end_to_end_pipeline.py`](examples/end_to_end_pipeline.py) — combina `ProjectService`, `SecureResource`, `Logger`, `FilesystemAdapter` y `ManagedResource` en un solo flujo de trabajo: detección de raíz de proyecto, carga de `.env`, entrada en sandbox, procesamiento de registros con logging estructurado y salida a almacenamiento gestionado.
+
+  **ETL concurrente y paralelo**
+
+  - [`etl_multiprocessing_pool.py`](examples/etl_multiprocessing_pool.py) — ETL distribuido con `multiprocessing.Pool`. Serializa un `ManagedResource` con `allow_pickle=True`, lo envía a workers mediante `pool.map` y llama a `_restore_runtime_state()` en el lado del worker. Útil para dividir un conjunto de datos grande en lotes y procesarlos en paralelo sin reconstruir la configuración por worker.
+  - [`etl_concurrent_threads.py`](examples/etl_concurrent_threads.py) — ETL con hilos y `ThreadPoolExecutor`. Múltiples tareas de pipeline (pedidos, devoluciones, reembolsos) se ejecutan concurrentemente, cada una leyendo de un `FilesystemAdapter` compartido, transformando registros y registrando el progreso por tarea. Muestra acceso thread-safe a `ManagedResource` y logging estructurado con contexto de fase.
+  - [`etl_async_pipeline.py`](examples/etl_async_pipeline.py) — pipeline ETL asíncrono con `asyncio.gather`. Las fuentes (usuarios, productos, eventos) se extraen, transforman y cargan concurrentemente usando async/await. El hook nativo `_acleanup` garantiza una limpieza adecuada. Útil para cargas de trabajo ligadas a E/S donde `asyncio` ofrece mayor concurrencia que los hilos.
+  - [`etl_concurrent_multiple.py`](examples/etl_concurrent_multiple.py) — múltiples fuentes ETL concurrentes con aislamiento de errores. Un solo `ManagedResource` gestiona dos adaptadores de sistema de archivos (archivo + memoria) y procesa datos de ventas, inventario y analítica en paralelo mediante `ThreadPoolExecutor`. El manejo de errores por fuente significa que un fallo no detiene a los demás.
+
+  **Perfiles de rendimiento**
+
+  - [`profile_logger_load.py`](examples/profile_logger_load.py) — benchmark de rendimiento integral del Logger bajo carga monohilo y concurrente. Mide registros limpios, registros con muchos PII y patrones de contención de hilos.
+  - [`profile_path_validation.py`](examples/profile_path_validation.py) — benchmark masivo de `is_secure_path()`, `is_valid_identifier()` y `is_valid_dotted_identifier()`. Revela el coste de `Path.resolve()` (ligado a syscalls) frente a la validación pura con regex (ligada a CPU).
+  - [`profile_pii_redaction.py`](examples/profile_pii_redaction.py) — benchmark del hot-path `PIISecretFilter.filter()` con cargas útiles profundamente anidadas y con muchos PII para estresar el recorrido recursivo y la lógica de escaneo de cadenas.
 
 ## Desarrollo
 
 Ejecuta las pruebas con el intérprete del proyecto:
 
 ```bash
-PYTHONPATH=src python -m pytest -q
+uv run pytest
 ```
