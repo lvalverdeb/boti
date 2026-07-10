@@ -55,13 +55,17 @@ def is_valid_identifier(name: str) -> bool:
     This is used to prevent code injection when generating code dynamically
     or handling user-supplied names in templates.
 
+    Uses fullmatch rather than match: `$` alone matches just before a
+    trailing newline, so `re.match` would wrongly accept "name\\n" as a
+    valid identifier and let a stray newline slip through validation.
+
     Args:
         name: The string to validate.
 
     Returns:
         bool: True if it is a valid Python identifier.
     """
-    return bool(re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name))
+    return bool(re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name))
 
 
 def is_valid_dotted_identifier(name: str) -> bool:

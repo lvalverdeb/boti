@@ -119,6 +119,21 @@ def test_managed_resource_instances_are_pickleable():
             restored.close()
 
 
+def test_is_pickleable_state_logs_debug_on_failure(caplog):
+    """Regression: _is_pickleable_state used to swallow pickle.dumps()
+    failures with a bare `except Exception: return False`, giving no trace
+    of why a resource was deemed unpickleable. It now logs at debug level."""
+    import logging
+
+    unpickleable = lambda: None  # noqa: E731 -- lambdas cannot be pickled
+
+    with caplog.at_level(logging.DEBUG, logger="boti.core.managed_resource"):
+        result = ManagedResource._is_pickleable_state(unpickleable)
+
+    assert result is False
+    assert any("pickle.dumps() failed" in record.message for record in caplog.records)
+
+
 def test_managed_resource_pickle_requires_explicit_opt_in():
     """Verify resource pickling is disabled unless explicitly enabled."""
     res = SimpleResource()

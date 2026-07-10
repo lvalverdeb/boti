@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import pickle
 import threading
@@ -24,6 +25,10 @@ import fsspec
 from boti.core.logger import Logger
 from boti.core.models import ResourceConfig
 from boti.core.project import ProjectService
+
+# Module-level fallback for staticmethods with no instance logger available.
+# Debug level only — this is an expected/best-effort probe.
+_module_log = logging.getLogger(__name__)
 
 
 class ManagedResource:
@@ -109,6 +114,7 @@ class ManagedResource:
         try:
             pickle.dumps(value)
         except Exception:
+            _module_log.debug("pickle.dumps() failed in _is_pickleable_state", exc_info=True)
             return False
         return True
 
@@ -240,8 +246,8 @@ class ManagedResource:
                     stacklevel=2
                 )
         except Exception:
+            _module_log.debug("Exception in _finalize_callback (harmless during shutdown)")
             # Never raise during interpreter shutdown or GC
-            pass
 
     @property
     def closed(self) -> bool:

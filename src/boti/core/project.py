@@ -8,6 +8,7 @@ ensuring that toolkit operations are context-aware.
 from __future__ import annotations
 
 import inspect
+import logging
 import os
 import warnings
 from pathlib import Path
@@ -17,6 +18,8 @@ from collections.abc import Iterable
 
 from boti.core.security import is_secure_path
 from boti.core.settings import load_dotenv_values
+
+_logger = logging.getLogger(__name__)
 
 
 class ProjectService:
@@ -116,6 +119,7 @@ class ProjectService:
                 if not p.exists():
                     continue
             except (ValueError, OSError):
+                _logger.debug("Skipping invalid path: %r", filename)
                 continue
             raw_candidates.append(filename)
 

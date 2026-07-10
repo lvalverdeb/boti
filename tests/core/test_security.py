@@ -10,7 +10,9 @@ import pytest
 
 from boti.core import ProjectService, SecureResource
 from boti.core import project as project_module
+from boti.core import secure_io as secure_io_module
 from boti.core.models import ResourceConfig
+from boti.core.security import is_valid_dotted_identifier, is_valid_identifier
 
 
 def test_project_root_detection(temp_project_root):
@@ -163,3 +165,121 @@ def test_secure_resource_default_logger_uses_project_root(temp_project_root):
 
     with SecureResource(config=config) as res:
         assert res.logger.log_dir == (temp_project_root / "logs").resolve()
+
+
+# ---------------------------------------------------------------------------
+# Adversarial / zero-day-style regressions
+#
+# Each test below reproduces a bypass technique that was verified against the
+# actual implementation before being fixed (or, where the implementation was
+# already correct, locks in that correctness so a future refactor can't
+# silently reintroduce it).
+# ---------------------------------------------------------------------------
+
+
+class TestIdentifierRegexAnchorBypass:
+    """`is_valid_identifier` is documented as a code-injection guard for
+    dynamically generated code and dotted-import paths (see
+    boti-data's sql_model_registry/sql_model_builder). It used
+    `re.match(r'^...$', name)`; `$` matches just before a trailing newline
+    rather than only at the true end of string, so `re.match` (which does not
+    require consuming the whole input) let a name like "foo\\n" pass as a
+    valid identifier. `re.fullmatch` closes this."""
+
+    def test_rejects_trailing_newline(self):
+        assert is_valid_identifier("valid_name") is True
+        assert is_valid_identifier("valid_name\n") is False
+        assert is_valid_identifier("valid_name\n\n") is False
+
+    def test_rejects_embedded_content_after_newline(self):
+        assert is_valid_identifier("os\nimport sys") is False
+
+    def test_dotted_identifier_rejects_trailing_newline(self):
+        assert is_valid_dotted_identifier("pkg.module") is True
+        assert is_valid_dotted_identifier("pkg.module\n") is False
+
+
+class TestGetSecurePathFailsClosed:
+    """`get_secure_path` is documented to raise only `PermissionError` on
+    denial. Its `Path(path).resolve()` call was unguarded, so malformed
+    input (e.g. a NUL byte) raised a raw ValueError/OSError instead —
+    callers written against the documented contract (like boti-data's
+    former ad-hoc null-byte check) could let that escape uncaught."""
+
+    def test_null_byte_raises_permission_error_not_value_error(self, temp_project_root):
+        config = ResourceConfig(project_root=temp_project_root)
+        with SecureResource(config=config) as res:
+            with pytest.raises(PermissionError, match="could not be resolved"):
+                res.get_secure_path("valid\x00.txt")
+
+    def test_null_byte_blocked_through_open_secure(self, temp_project_root):
+        config = ResourceConfig(project_root=temp_project_root)
+        with SecureResource(config=config) as res:
+            with pytest.raises(PermissionError):
+                res.write_text_secure("valid\x00.txt", "content")
+
+
+class TestSandboxBypassTechniques:
+    """These isolate the sandbox from the default system-temp allowlist (by
+    patching tempfile.gettempdir) so that `tmp_path`-adjacent siblings are
+    genuinely outside every allowed root, letting each bypass technique be
+    tested against a real boundary instead of accidentally landing back
+    inside the always-allowed system temp directory."""
+
+    def _isolated_resource(self, tmp_path, monkeypatch):
+        fake_temp = tmp_path / "faketemp"
+        fake_temp.mkdir()
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "pyproject.toml").touch()
+        monkeypatch.setattr(secure_io_module.tempfile, "gettempdir", lambda: str(fake_temp))
+        config = ResourceConfig(project_root=root)
+        return root, SecureResource(config=config)
+
+    def test_symlink_inside_root_escaping_to_outside_target_is_blocked(self, tmp_path, monkeypatch):
+        """A symlink that physically lives inside the project root but points
+        to a file outside every allowed root must be denied — Path.resolve()
+        follows symlinks, so validation must run against the resolved target,
+        never the link's own location."""
+        root, res = self._isolated_resource(tmp_path, monkeypatch)
+        outside = tmp_path / "outside_secret"
+        outside.mkdir()
+        secret = outside / "secret.txt"
+        secret.write_text("TOP SECRET")
+        link = root / "escape_link"
+        link.symlink_to(secret)
+
+        with res:
+            with pytest.raises(PermissionError):
+                res.get_secure_path(link)
+
+    def test_sibling_directory_prefix_confusion_is_blocked(self, tmp_path, monkeypatch):
+        """A sibling directory whose string form merely starts with the
+        allowed root's path (e.g. '.../root' vs '.../root_evil') must not be
+        treated as contained within it. This locks in that the boundary
+        check uses Path.is_relative_to (component-wise) rather than a raw
+        string prefix comparison, which would be fooled by this pattern."""
+        root, res = self._isolated_resource(tmp_path, monkeypatch)
+        sibling_evil = Path(str(root) + "_evil")
+        sibling_evil.mkdir()
+        evil_file = sibling_evil / "x.txt"
+        evil_file.write_text("evil")
+
+        with res:
+            with pytest.raises(PermissionError):
+                res.get_secure_path(evil_file)
+
+    def test_relative_traversal_escaping_root_via_dotdot_is_blocked(self, tmp_path, monkeypatch):
+        """'..' segments in a path that otherwise starts inside the root
+        must not be able to walk back out past it."""
+        root, res = self._isolated_resource(tmp_path, monkeypatch)
+        nested = root / "a" / "b"
+        nested.mkdir(parents=True)
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("TOP SECRET")
+
+        traversal = nested / ".." / ".." / ".." / "outside" / "secret.txt"
+        with res:
+            with pytest.raises(PermissionError):
+                res.get_secure_path(traversal)

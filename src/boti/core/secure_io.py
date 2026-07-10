@@ -76,9 +76,23 @@ class SecureResource(ManagedResource):
             Path: The resolved absolute Path object.
             
         Raises:
-            PermissionError: If the path is outside the configured sandbox roots.
+            PermissionError: If the path is outside the configured sandbox roots,
+                or cannot be resolved at all (e.g. contains a NUL byte, hits a
+                filesystem error, or fails a symlink lookup). Resolution failures
+                are treated as untrusted input and denied rather than left to
+                bubble up as a raw OSError/ValueError.
         """
-        resolved = Path(path).resolve()
+        try:
+            resolved = Path(path).resolve()
+        except (OSError, ValueError) as exc:
+            if self.logger is not None:
+                self.logger.error(
+                    f"SECURITY VIOLATION: Path could not be resolved. "
+                    f"Target: {path!r}, Error: {exc}"
+                )
+            raise PermissionError(
+                f"Access denied: Path {path!r} could not be resolved ({exc})."
+            ) from exc
         if not is_secure_path(resolved, self.allowed_paths):
             if self.logger is not None:
                 self.logger.error(
