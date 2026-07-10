@@ -387,7 +387,27 @@ print(restored.closed)      # False
 restored.close()
 ```
 
-`trusted_unpickle_scope()` es un gestor de contexto que establece `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE=1` durante su duración y restaura el valor original al salir. Úsalo en el punto de entrada del worker en lugar de establecer la variable globalmente cuando sea posible.
+`trusted_unpickle_scope()` habilita la deserialización **solo para el hilo actual** — usa estado thread-local y no modifica `os.environ`, por lo que los hilos concurrentes del mismo proceso no se ven afectados. Prefiérelo siempre que el punto de deserialización esté en código que controlas.
+
+Los ámbitos thread-local no cruzan la frontera entre procesos. En runtimes multiproceso (workers de Dask, pools de `multiprocessing`) donde la deserialización ocurre dentro del código del framework, establece la variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE=1` en el **arranque del worker**:
+
+```bash
+# Dask: entorno por worker
+dask worker tcp://scheduler:8786 --env BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE=1
+```
+
+```python
+# multiprocessing: inicializador del pool
+import os
+from multiprocessing import Pool
+
+def _enable_trusted_unpickle() -> None:
+    os.environ["BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE"] = "1"
+
+pool = Pool(initializer=_enable_trusted_unpickle)
+```
+
+Habilita la variable únicamente en procesos worker internos que reciban payloads exclusivamente de runtimes que controlas — nunca en nada accesible desde redes no confiables. Mientras esté activa, el primer recurso creado en cada proceso registra una advertencia `[SECURITY]` para que el modo activo siga siendo visible.
 
 #### Reconstrucción de conexiones transitorias tras la deserialización
 

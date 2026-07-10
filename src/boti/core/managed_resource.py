@@ -16,7 +16,7 @@ import threading
 import warnings
 import weakref
 from collections.abc import Callable
-from typing import Any, Self, final
+from typing import Any, ClassVar, Self, final
 
 __all__ = ["ManagedResource"]
 
@@ -43,6 +43,10 @@ class ManagedResource:
     # Thread-local storage for trusted_unpickle_scope so the scope is
     # confined to the calling thread and does not bleed into sibling threads.
     _thread_local: threading.local = threading.local()
+    # Process-wide dedupe for the trusted-unpickle startup warning: worker
+    # processes that enable the env var create many resources, and repeating
+    # the same SECURITY message on every init drowns out real log content.
+    _trusted_unpickle_warning_emitted: ClassVar[bool] = False
 
     def __init__(
         self,
@@ -73,7 +77,18 @@ class ManagedResource:
         self._owns_fs = self._fs_factory is not None
 
         self._state_lock = threading.RLock()
+        # Single-flights fs_factory() calls without blocking _state_lock readers,
+        # so a slow remote connect cannot stall closed/close() in other threads.
+        self._fs_init_lock = threading.Lock()
         self._aclose_lock = asyncio.Lock()
+        # Set once cleanup has fully finished; concurrent close() callers wait
+        # on it so close() acts as a barrier rather than returning early.
+        self._closed_event = threading.Event()
+        self._closing_thread: int | None = None
+        # Task identity of the aclose() closer: a reentrant aclose() from
+        # within _acleanup runs in the same task, while a sibling task on the
+        # same event loop (same OS thread) must still hit the barrier.
+        self._closing_task: asyncio.Task[Any] | None = None
         self._configure_logger()
         self._attach_finalizer()
         self._warn_if_trusted_unpickle_active()
@@ -149,20 +164,27 @@ class ManagedResource:
 
         This env var enables ManagedResource deserialization for distributed workflows.
         Accidentally enabling it in a public-facing service would allow RCE via a crafted
-        pickle payload.  The warning makes the active mode visible in every log.
+        pickle payload.  The warning is emitted once per process: worker processes that
+        enable the mode at startup create many resources, and repeating it on every init
+        would bury real log content.
         """
-        if self._trusted_unpickle_enabled():
-            msg = (
-                f"[SECURITY] {self.__class__.__name__}: "
-                f"{self._TRUSTED_UNPICKLE_ENV} is ENABLED on this process. "
-                "Trusted-unpickle mode allows ManagedResource deserialization. "
-                "Ensure this process is only accessible from trusted internal workers — "
-                "never expose it to public or untrusted networks."
-            )
-            warnings.warn(msg, RuntimeWarning, stacklevel=4)
-            if self.logger is not None:
-                with contextlib.suppress(Exception):
-                    self.logger.warning(msg)
+        if not self._trusted_unpickle_enabled():
+            return
+        if ManagedResource._trusted_unpickle_warning_emitted:
+            return
+        # Benign race: two concurrent first inits may both warn; that is acceptable.
+        ManagedResource._trusted_unpickle_warning_emitted = True
+        msg = (
+            f"[SECURITY] {self.__class__.__name__}: "
+            f"{self._TRUSTED_UNPICKLE_ENV} is ENABLED on this process. "
+            "Trusted-unpickle mode allows ManagedResource deserialization. "
+            "Ensure this process is only accessible from trusted internal workers — "
+            "never expose it to public or untrusted networks."
+        )
+        warnings.warn(msg, RuntimeWarning, stacklevel=4)
+        if self.logger is not None:
+            with contextlib.suppress(Exception):
+                self.logger.warning(msg)
 
     def __getstate__(self) -> dict[str, Any]:
         """Drop runtime-only state so subclasses remain pickleable."""
@@ -180,7 +202,11 @@ class ManagedResource:
                 "must override __getstate__/__setstate__."
             ) from None
         state.pop("_state_lock", None)
+        state.pop("_fs_init_lock", None)
         state.pop("_aclose_lock", None)
+        state.pop("_closed_event", None)
+        state.pop("_closing_thread", None)
+        state.pop("_closing_task", None)
         state.pop("_finalizer", None)
         state.pop("logger", None)
 
@@ -219,8 +245,12 @@ class ManagedResource:
 
         self.__dict__.update(state)
         self._state_lock = threading.RLock()
+        self._fs_init_lock = threading.Lock()
         self._aclose_lock = asyncio.Lock()
+        self._closed_event = threading.Event()
         self._closing = False
+        self._closing_thread = None
+        self._closing_task = None
         self._configure_logger()
         self._restore_runtime_state()
         self._attach_finalizer()
@@ -260,7 +290,11 @@ class ManagedResource:
         pass
 
     def _release_fs(self) -> None:
-        """Drop the owned filesystem reference. Runs in close()/aclose() after _cleanup()."""
+        """Drop the owned filesystem reference.
+
+        Runs in close()/aclose() after _cleanup(), with _state_lock held so the
+        release is atomic with the _is_closed transition.
+        """
         if self._owns_fs:
             self.fs = None
 
@@ -275,22 +309,38 @@ class ManagedResource:
                 raise RuntimeError(f"{self.__class__.__name__} is closed")
 
     def _ensure_fs(self) -> fsspec.AbstractFileSystem | None:
-        """Lazy-loads the filesystem if a factory is provided."""
+        """Lazy-loads the filesystem if a factory is provided.
+
+        The factory runs *outside* ``_state_lock`` so a slow remote connect
+        (potentially seconds of retries) cannot block ``closed``/``close()``
+        in other threads.  ``_fs_init_lock`` keeps factory calls single-flight.
+        """
         with self._state_lock:
             self._assert_open()
             if self.fs is not None:
                 return self.fs
             if self._fs_factory is None:
                 return None
-            
-            fs_new = self._fs_factory()
+            factory = self._fs_factory
+
+        with self._fs_init_lock:
+            with self._state_lock:
+                self._assert_open()
+                if self.fs is not None:
+                    return self.fs
+
+            fs_new = factory()
             if not isinstance(fs_new, fsspec.AbstractFileSystem):
                 raise TypeError(
                     f"fs_factory() must return fsspec.AbstractFileSystem, "
                     f"got {type(fs_new)!r}"
                 )
-            self.fs = fs_new
-            return self.fs
+            with self._state_lock:
+                # The resource may have been closed while the factory ran;
+                # never publish a filesystem onto a closed resource.
+                self._assert_open()
+                self.fs = fs_new
+                return self.fs
 
     def require_fs(self) -> fsspec.AbstractFileSystem:
         """Ensures a filesystem is available or raises RuntimeError."""
@@ -316,15 +366,28 @@ class ManagedResource:
     def close(self, *, suppress_errors: bool = False) -> None:
         """Synchronously release managed resources.
 
-        Thread-safe and idempotent: concurrent or repeated calls are silently
-        ignored after the first caller sets ``_closing``.  The state lock is
-        held only for the brief state-transition checks; the actual cleanup
-        runs outside the lock so subclass hooks can freely call other methods.
+        Thread-safe and idempotent.  The first caller runs ``_cleanup()``;
+        concurrent callers from other threads block until that cleanup has
+        finished, so ``close()`` acts as a barrier — when it returns, cleanup
+        is done.  A reentrant call from within ``_cleanup()`` (same thread)
+        returns immediately instead of deadlocking.  The state lock is held
+        only for the brief state-transition checks; the actual cleanup runs
+        outside the lock so subclass hooks can freely call other methods.
         """
         with self._state_lock:
-            if self._is_closed or self._closing:
+            if self._is_closed:
                 return
-            self._closing = True
+            if self._closing:
+                if self._closing_thread == threading.get_ident():
+                    return
+                waiter = self._closed_event
+            else:
+                self._closing = True
+                self._closing_thread = threading.get_ident()
+                waiter = None
+        if waiter is not None:
+            waiter.wait()
+            return
         try:
             self._cleanup()
         except Exception:
@@ -339,28 +402,58 @@ class ManagedResource:
             with self._state_lock:
                 self._is_closed = True
                 self._closing = False
-            self._release_fs()
+                self._closing_thread = None
+                self._release_fs()
+            self._closed_event.set()
             self._detach_finalizer()
 
     async def aclose(self, *, suppress_errors: bool = False) -> None:
         """Asynchronously release managed resources.
 
         The async lock serialises concurrent async closes within the same event
-        loop.  ``_closing`` guards against a simultaneous sync ``close()`` from
-        another thread.  ``_detach_finalizer`` is called inside the ``finally``
-        block so it runs even when cleanup raises.
+        loop.  A reentrant ``aclose()`` from within ``_acleanup()`` (same task)
+        returns before touching the non-reentrant async lock instead of
+        deadlocking on it; sibling tasks still queue on the lock and observe
+        the barrier.  If a sync ``close()`` from another thread is already in
+        flight, this call waits off-loop for it to finish, mirroring the
+        barrier semantics of ``close()``.  ``_detach_finalizer`` is called
+        inside the ``finally`` block so it runs even when cleanup raises.
         """
+        with self._state_lock:
+            if self._is_closed:
+                return
+            if (
+                self._closing
+                and self._closing_task is not None
+                and self._closing_task is asyncio.current_task()
+            ):
+                # Reentrant aclose() from within a cleanup hook: _aclose_lock
+                # is already held by this task and asyncio locks are not
+                # reentrant, so acquiring it again would deadlock.
+                return
+
         async with self._aclose_lock:
             with self._state_lock:
-                if self._is_closed or self._closing:
+                if self._is_closed:
                     return
-                self._closing = True
+                if self._closing:
+                    if self._closing_thread == threading.get_ident():
+                        return
+                    waiter = self._closed_event
+                else:
+                    self._closing = True
+                    self._closing_thread = threading.get_ident()
+                    self._closing_task = asyncio.current_task()
+                    waiter = None
+            if waiter is not None:
+                await asyncio.to_thread(waiter.wait)
+                return
 
             try:
                 if type(self)._acleanup is not ManagedResource._acleanup:
                     await self._acleanup()
                 else:
-                    await asyncio.to_thread(self._cleanup)
+                    await asyncio.to_thread(self._cleanup_adopting_closer_thread)
             except Exception:
                 if self.logger is not None:
                     self.logger.error(
@@ -373,11 +466,30 @@ class ManagedResource:
                 with self._state_lock:
                     self._is_closed = True
                     self._closing = False
-                self._release_fs()
+                    self._closing_thread = None
+                    self._closing_task = None
+                    self._release_fs()
+                self._closed_event.set()
                 self._detach_finalizer()
 
-    @final
+    def _cleanup_adopting_closer_thread(self) -> None:
+        """Run ``_cleanup()`` in a ``to_thread`` worker, adopting closer identity.
+
+        Without this, a reentrant ``close()`` from inside the hook would not
+        match ``_closing_thread`` and would deadlock waiting on its own barrier.
+        """
+        with self._state_lock:
+            self._closing_thread = threading.get_ident()
+        self._cleanup()
+
     def __enter__(self) -> Self:
+        """Enter the resource context.
+
+        Subclasses may override to return a different object (e.g. a session
+        yielding its client) but must call ``_assert_open()`` first.
+        ``__exit__`` remains final, so ``close()`` always runs regardless of
+        what ``__enter__`` returned.
+        """
         self._assert_open()
         return self
 

@@ -69,6 +69,27 @@ def example_open_secure(project_root: Path) -> None:
         print(f"  streamed lines: {[l.rstrip() for l in lines]}")
 
 
+def example_symlink_rejected(project_root: Path) -> None:
+    """A symlinked extra_allowed_path is rejected — it could silently widen the sandbox."""
+    outside_dir = project_root.parent / "outside_boundary"
+    outside_dir.mkdir(exist_ok=True)
+    symlink_path = project_root / "sneaky_link"
+
+    try:
+        symlink_path.symlink_to(outside_dir, target_is_directory=True)
+    except OSError as exc:
+        print(f"  (skipped: platform does not support symlinks here: {exc})")
+        return
+
+    try:
+        SecureResource(config=ResourceConfig(
+            project_root=project_root,
+            extra_allowed_paths=[str(symlink_path)],
+        ))
+    except ValueError as exc:
+        print(f"  blocked: {exc}")
+
+
 def example_allowed_paths_property(project_root: Path) -> None:
     """Inspect the list of allowed sandbox roots."""
     with SecureResource(config=ResourceConfig(project_root=project_root)) as resource:
@@ -89,6 +110,8 @@ def main() -> None:
         example_extra_allowed_paths(project_root)
         print()
         example_open_secure(project_root)
+        print()
+        example_symlink_rejected(project_root)
         print()
         example_allowed_paths_property(project_root)
         print()

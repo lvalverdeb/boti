@@ -1,6 +1,7 @@
 """
 Tests for ManagedResource lifecycle (sync and async).
 """
+import asyncio
 import gc
 import pickle
 import threading
@@ -240,23 +241,49 @@ def test_managed_resource_pickle_strips_runtime_only_logger_and_fs_factory():
             restored.close()
 
 
-def test_trusted_unpickle_active_emits_startup_warning():
+def test_trusted_unpickle_active_emits_startup_warning(monkeypatch):
     """SECURITY: instantiating a ManagedResource while trusted-unpickle mode is active
     must emit a loud RuntimeWarning so operators never miss the setting."""
-    with ManagedResource.trusted_unpickle_scope():
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            res = SimpleResource()
-            try:
-                security_warnings = [
-                    w for w in caught if issubclass(w.category, RuntimeWarning)
-                    and "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE" in str(w.message)
-                ]
-                assert security_warnings, (
-                    "Expected a RuntimeWarning about BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE "
-                    "but none was emitted."
-                )
-            finally:
+    monkeypatch.setattr(ManagedResource, "_trusted_unpickle_warning_emitted", False)
+    with (
+        ManagedResource.trusted_unpickle_scope(),
+        warnings.catch_warnings(record=True) as caught,
+    ):
+        warnings.simplefilter("always")
+        res = SimpleResource()
+        try:
+            security_warnings = [
+                w for w in caught if issubclass(w.category, RuntimeWarning)
+                and "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE" in str(w.message)
+            ]
+            assert security_warnings, (
+                "Expected a RuntimeWarning about BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE "
+                "but none was emitted."
+            )
+        finally:
+            res.close()
+
+
+def test_trusted_unpickle_warning_emitted_once_per_process(monkeypatch):
+    """The trusted-unpickle warning is deduped so worker processes creating many
+    resources do not repeat the same SECURITY message on every init."""
+    monkeypatch.setattr(ManagedResource, "_trusted_unpickle_warning_emitted", False)
+    with (
+        ManagedResource.trusted_unpickle_scope(),
+        warnings.catch_warnings(record=True) as caught,
+    ):
+        warnings.simplefilter("always")
+        resources = [SimpleResource() for _ in range(5)]
+        try:
+            security_warnings = [
+                w for w in caught if issubclass(w.category, RuntimeWarning)
+                and "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE" in str(w.message)
+            ]
+            assert len(security_warnings) == 1, (
+                f"Expected exactly one SECURITY warning, got {len(security_warnings)}."
+            )
+        finally:
+            for res in resources:
                 res.close()
 
 
@@ -412,6 +439,206 @@ def test_cross_thread_trusted_unpickle_scope_isolation():
         restored = pickle.loads(payload)
         assert isinstance(restored, SimpleResource)
         restored.close()
+
+
+# ---------------------------------------------------------------------------
+# Close-barrier and lock-scope regression tests
+# ---------------------------------------------------------------------------
+
+def test_concurrent_close_waits_for_cleanup():
+    """close() from a second thread must not return until the first closer's
+    cleanup has actually finished (barrier semantics)."""
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+
+    class SlowCloseResource(ManagedResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.cleanup_finished = False
+
+        def _cleanup(self):
+            cleanup_started.set()
+            release_cleanup.wait(timeout=5)
+            self.cleanup_finished = True
+
+    res = SlowCloseResource()
+    first_closer = threading.Thread(target=res.close)
+    first_closer.start()
+    assert cleanup_started.wait(timeout=5)
+
+    observed: dict[str, bool] = {}
+
+    def second_closer() -> None:
+        res.close()  # must block until cleanup is done
+        observed["finished_at_return"] = res.cleanup_finished
+
+    second = threading.Thread(target=second_closer)
+    second.start()
+    # The second closer is waiting on the barrier, not returning early.
+    second.join(timeout=0.2)
+    assert second.is_alive(), "second close() returned before cleanup finished"
+
+    release_cleanup.set()
+    first_closer.join(timeout=5)
+    second.join(timeout=5)
+    assert not second.is_alive()
+    assert observed["finished_at_return"] is True
+    assert res.closed
+
+
+def test_reentrant_close_from_cleanup_does_not_deadlock():
+    """A _cleanup() hook that calls close() again must return, not deadlock."""
+    class ReentrantResource(ManagedResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.reentered = False
+
+        def _cleanup(self):
+            self.close()  # reentrant: same thread, must be a no-op
+            self.reentered = True
+
+    res = ReentrantResource()
+    closer = threading.Thread(target=res.close)
+    closer.start()
+    closer.join(timeout=5)
+    assert not closer.is_alive(), "reentrant close() deadlocked"
+    assert res.reentered
+    assert res.closed
+
+
+@pytest.mark.asyncio
+async def test_reentrant_aclose_from_acleanup_does_not_deadlock():
+    """An _acleanup() hook that awaits aclose() again must return, not
+    deadlock on the non-reentrant _aclose_lock."""
+    class ReentrantAsync(ManagedResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.reentered = False
+
+        async def _acleanup(self):
+            await self.aclose()  # reentrant: same task, must be a no-op
+            self.reentered = True
+
+    res = ReentrantAsync()
+    await asyncio.wait_for(res.aclose(), timeout=5)
+    assert res.reentered
+    assert res.closed
+
+
+@pytest.mark.asyncio
+async def test_concurrent_aclose_tasks_observe_barrier():
+    """A sibling task calling aclose() runs on the same OS thread as the
+    closer but is a different task: it must wait for cleanup, not skip it."""
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    class SlowAsyncClose(ManagedResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.cleanup_finished = False
+
+        async def _acleanup(self):
+            cleanup_started.set()
+            await release_cleanup.wait()
+            self.cleanup_finished = True
+
+    res = SlowAsyncClose()
+    first = asyncio.create_task(res.aclose())
+    await asyncio.wait_for(cleanup_started.wait(), timeout=5)
+
+    second = asyncio.create_task(res.aclose())
+    await asyncio.sleep(0.05)
+    assert not second.done(), "sibling aclose() returned before cleanup finished"
+
+    release_cleanup.set()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=5)
+    assert res.cleanup_finished
+    assert res.closed
+
+
+@pytest.mark.asyncio
+async def test_reentrant_close_from_acleanup_fallback_does_not_deadlock():
+    """aclose()'s to_thread fallback runs _cleanup on a worker thread; a
+    reentrant close() from inside the hook must still be recognised."""
+    class ReentrantSyncOnly(ManagedResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.reentered = False
+
+        def _cleanup(self):
+            self.close()
+            self.reentered = True
+
+    res = ReentrantSyncOnly()
+    await asyncio.wait_for(res.aclose(), timeout=5)
+    assert res.reentered
+    assert res.closed
+
+
+def test_closed_property_responsive_while_fs_factory_blocks():
+    """A slow fs_factory must not hold _state_lock: closed/close() stay usable."""
+    factory_entered = threading.Event()
+    release_factory = threading.Event()
+
+    def slow_factory():
+        factory_entered.set()
+        release_factory.wait(timeout=5)
+        return fsspec.filesystem("memory")
+
+    res = SimpleResource(fs_factory=slow_factory)
+    loader = threading.Thread(target=res.require_fs)
+    loader.start()
+    assert factory_entered.wait(timeout=5)
+
+    # With the factory mid-flight, state reads must return promptly.
+    probe_done = threading.Event()
+
+    def probe() -> None:
+        assert res.closed is False
+        probe_done.set()
+
+    prober = threading.Thread(target=probe)
+    prober.start()
+    assert probe_done.wait(timeout=1), "closed property blocked behind fs_factory"
+
+    release_factory.set()
+    loader.join(timeout=5)
+    prober.join(timeout=5)
+    assert res.fs is not None
+    res.close()
+
+
+def test_close_during_fs_factory_discards_filesystem():
+    """If the resource is closed while the factory runs, the built filesystem
+    must not be published and require_fs must raise."""
+    factory_entered = threading.Event()
+    release_factory = threading.Event()
+
+    def slow_factory():
+        factory_entered.set()
+        release_factory.wait(timeout=5)
+        return fsspec.filesystem("memory")
+
+    res = SimpleResource(fs_factory=slow_factory)
+    outcome: dict[str, object] = {}
+
+    def loader() -> None:
+        try:
+            res.require_fs()
+            outcome["result"] = "published"
+        except RuntimeError as exc:
+            outcome["result"] = exc
+
+    loader_thread = threading.Thread(target=loader)
+    loader_thread.start()
+    assert factory_entered.wait(timeout=5)
+
+    res.close()  # completes promptly: factory holds only _fs_init_lock
+    release_factory.set()
+    loader_thread.join(timeout=5)
+
+    assert isinstance(outcome["result"], RuntimeError)
+    assert res.fs is None
 
 
 
