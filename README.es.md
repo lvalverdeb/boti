@@ -79,7 +79,7 @@ from boti.core import is_secure_path
 También puedes importar directamente desde `boti.core`:
 
 ```python
-from boti.core import Logger, ManagedResource, ProjectService, SecureResource
+from boti.core import Agent, Logger, ManagedResource, ProjectService, SecureResource
 ```
 
 ## Inicio rápido
@@ -510,6 +510,46 @@ if __name__ == "__main__":
 
 Activa `allow_pickle` solo cuando controles ambos extremos del canal de serialización. Deserializar datos de fuentes no confiables puede ejecutar código arbitrario. La variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE` es la última línea de defensa: no la establezcas globalmente en entornos que procesen datos de fuentes externas.
 
+### Agentes de IA con `Agent`
+
+`Agent` es una base de ciclo de vida ligera para agentes de IA. Reutiliza la misma barrera segura para hilos de `close()` / `aclose()`, el protocolo de context-manager y el finalizador de advertencia de fugas por GC que ofrece `ManagedResource`, pero sin la inicialización lazy del sistema de archivos ni el control de seguridad de pickle que los agentes rara vez necesitan. Las subclases redefinen `_cleanup()` / `_acleanup()` para liberar estado propio del agente, como un cliente LLM o sesiones de llamadas a herramientas abiertas.
+
+`AgentConfig` refleja los campos de registro de `ResourceConfig`:
+
+- `verbose` / `debug` — elevan el nivel del logger por defecto (`WARNING` → `INFO` → `DEBUG`)
+- `logger` — proporciona tu propio `Logger` configurado en lugar del predeterminado
+- `skip_logger` — desactiva el registro por completo
+
+```python
+import asyncio
+
+from boti.core import Agent
+
+
+class EchoAgent(Agent):
+    def __init__(self, name: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.name = name
+
+    async def ask(self, prompt: str) -> str:
+        self._assert_open()  # raises if the agent has already been closed
+        return f"[{self.name}] you said: {prompt!r}"
+
+    async def _acleanup(self) -> None:
+        ...  # close the model session or tool clients here
+
+
+async def main() -> None:
+    async with EchoAgent("assistant", verbose=True) as agent:
+        print(await agent.ask("what is the weather in Lima?"))
+    print(agent.closed)  # True
+
+
+asyncio.run(main())
+```
+
+Un agente que solo implementa un `_cleanup()` síncrono también funciona con `async with`: `aclose()` ejecuta la limpieza síncrona en un hilo de trabajo. Y como todo objeto de ciclo de vida en `boti`, un agente recolectado por el GC sin haberse cerrado emite una advertencia de fuga, de modo que un agente olvidado en un servicio de larga duración nunca pasa desapercibido.
+
 ## Más documentación
 
 - [`examples/`](examples/)
@@ -521,6 +561,15 @@ Activa `allow_pickle` solo cuando controles ambos extremos del canal de serializ
   - [`async_resource.py`](examples/async_resource.py) — `ManagedResource` con `_acleanup` nativo para limpieza asíncrona sin fallback síncrono.
   - [`managed_resource_pickle.py`](examples/managed_resource_pickle.py) — denegación de pickle por defecto, gestor de contexto `trusted_unpickle_scope()`, `_restore_runtime_state()` tras la deserialización y la variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`.
 
+  - [`lifecycle_core_standalone.py`](examples/lifecycle_core_standalone.py) — `LifecycleCore` usado por sí solo (la pieza extraída de `ManagedResource` para que respalde clases no relacionadas como `Agent`): una clase simple obtiene la barrera completa de cierre síncrono+asíncrono, el protocolo de context-manager y la advertencia de fuga por GC sin ninguna otra importación de boti; también muestra la barrera bloqueando a un segundo llamante y el `close()` reentrante desde un hook de limpieza.
+  - [`fsspec_mixin_standalone.py`](examples/fsspec_mixin_standalone.py) — `FsspecMixin` compuesto directamente sobre `LifecycleCore` para un recurso solo de sistema de archivos, sin seguridad de pickle ni la maquinaria de `ResourceConfig`/`Logger`: materialización lazy con `require_fs()`, llamadas de fábrica single-flight bajo concurrencia y liberación del sistema de archivos integrada en la barrera de cierre.
+  - [`pickle_security_mixin_standalone.py`](examples/pickle_security_mixin_standalone.py) — `PickleSecurityMixin` compuesto directamente sobre `LifecycleCore` (sin fsspec): pickle denegado por defecto y permitido con `allow_pickle=True`, deserialización condicionada por `trusted_unpickle_scope()` y `__getstate__` degradando de forma segura cuando no existe estado de sistema de archivos.
+  - [`resource_error_recovery.py`](examples/resource_error_recovery.py) — semántica de fallos de limpieza de `ManagedResource`: `__exit__` suprimiendo un error de limpieza mientras ya se propaga una excepción del usuario (para no enmascarar la original) frente a dejarlo propagar en caso contrario, `close(suppress_errors=...)` y los fallos de limpieza siempre registrados.
+
+  **Agentes de IA**
+
+  - [`agent_basics.py`](examples/agent_basics.py) — la clase base `Agent` construida sobre `LifecycleCore`: niveles de registro de `AgentConfig`, llamadas a herramientas asíncronas protegidas por `_assert_open()`, un `_acleanup()` asíncrono real, un enjambre concurrente de múltiples agentes cerrado con `asyncio.gather`, un agente solo síncrono que depende del fallback a hilo de `aclose()` y la advertencia de fuga por GC para un agente abandonado.
+
   **Abstracciones del sistema de archivos**
 
   - [`filesystem_config.py`](examples/filesystem_config.py) — `FilesystemConfig` para backends local, en memoria y compatible con S3 usando `create_filesystem()` y `FilesystemAdapter`.
@@ -528,10 +577,14 @@ Activa `allow_pickle` solo cuando controles ambos extremos del canal de serializ
   - [`filesystem_pyarrow.py`](examples/filesystem_pyarrow.py) — integración PyArrow: `FilesystemAdapter.get_pyarrow_filesystem()`, lectura/escritura de Parquet a través de fsspec y comportamiento de caché del adaptador.
   - [`filesystem_supported_backends.py`](examples/filesystem_supported_backends.py) — prueba a nivel de constructor para cada backend fsspec que soporta boti. Útil para identificar rápidamente paquetes de drivers opcionales faltantes.
 
+  - [`filesystem_resilience.py`](examples/filesystem_resilience.py) — reintentos/backoff de `FilesystemAdapter` y allowlisting de endpoints contra SSRF: reintento con backoff exponencial ante errores de conexión transitorios, `max_attempts=1` desactivando el reintento, reintentos agotados relanzando el último error, `fs_endpoint` rechazando IPs privadas/reservadas y `add_endpoint_to_allowlist()` para un host interno aprobado por el operador.
+
   **Registro (logging)**
 
   - [`logger.py`](examples/logger.py) — `Logger` con manejo seguro de archivos, redacción de PII (contraseñas, tokens, claves API), logging estructurado, fábrica `default_logger()` con caché LRU y loggers por espacio de nombres.
   - [`logger_runtime.py`](examples/logger_runtime.py) — listener de fondo `LoggerRuntime`, logging multi-destino (archivo + stderr), `SafeRotatingFileHandler` y apagado graceful.
+
+  - [`logger_bind.py`](examples/logger_bind.py) — `Logger.bind()` para registro estructurado con ámbito de petición/tarea: una copia vinculada que lleva contexto `extra` fusionado a cada llamada posterior, binds encadenados que acumulan campos, aislamiento entre hijo y padre y el contexto vinculado pasando aún por la redacción de PII.
 
   **Seguridad — E/S en sandbox y validación**
 
@@ -543,6 +596,8 @@ Activa `allow_pickle` solo cuando controles ambos extremos del canal de serializ
   - [`project_environment.py`](examples/project_environment.py) — `ProjectService.detect_project_root()` y carga de archivos `.env` con `setup_environment()`.
   - [`project_service_runtime.py`](examples/project_service_runtime.py) — uso de `ProjectService` centrado en tiempo de ejecución: detección de raíz de servicio, carga de un archivo runtime.env y lectura de valores de configuración.
   - [`settings.py`](examples/settings.py) — modelos de configuración tipados (`SqlDatabaseSettings`, `FilesystemSettings`), `load_prefixed_model()`, `load_dotenv_values()` y precedencia de anulación dotenv vs entorno de proceso.
+
+  - [`sql_database_settings_pool.py`](examples/sql_database_settings_pool.py) — ajuste del pool de conexiones de `SqlDatabaseSettings`: parámetros del pool (`pool_size`, `max_overflow`, `pool_timeout`, `pool_recycle`, `pool_pre_ping`) desde variables de entorno `DB_*`, ensamblado de los kwargs de `create_engine()`, `worker_connection_env_var` para resolver credenciales por worker, paso directo de `connect_args`/`execution_options` y `query_only` con valor seguro por defecto.
 
   **Pipeline integral**
 
