@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from boti.core import ManagedResource
 from boti.core import project as project_module
 from boti.core.models import ResourceConfig
+from boti.core.pickle_security import PickleSecurityMixin
 
 
 class SimpleResource(ManagedResource):
@@ -128,7 +129,7 @@ def test_is_pickleable_state_logs_debug_on_failure(caplog):
 
     unpickleable = lambda: None  # noqa: E731 -- lambdas cannot be pickled
 
-    with caplog.at_level(logging.DEBUG, logger="boti.core.managed_resource"):
+    with caplog.at_level(logging.DEBUG, logger="boti.core.pickle_security"):
         result = ManagedResource._is_pickleable_state(unpickleable)
 
     assert result is False
@@ -179,12 +180,6 @@ def test_managed_resource_default_logger_recovers_from_root_cwd(monkeypatch, tem
         assert res.logger.log_dir == (temp_project_root / "logs").resolve()
     finally:
         res.close()
-
-
-def test_managed_resource_pickle_strips_runtime_only_logger_and_fs_factory():
-    class UnpickleableLogger:
-        def __init__(self) -> None:
-            import threading
 
 
 def test_skip_logger_does_not_create_logger():
@@ -244,7 +239,7 @@ def test_managed_resource_pickle_strips_runtime_only_logger_and_fs_factory():
 def test_trusted_unpickle_active_emits_startup_warning(monkeypatch):
     """SECURITY: instantiating a ManagedResource while trusted-unpickle mode is active
     must emit a loud RuntimeWarning so operators never miss the setting."""
-    monkeypatch.setattr(ManagedResource, "_trusted_unpickle_warning_emitted", False)
+    monkeypatch.setattr(PickleSecurityMixin, "_trusted_unpickle_warning_emitted", False)
     with (
         ManagedResource.trusted_unpickle_scope(),
         warnings.catch_warnings(record=True) as caught,
@@ -267,7 +262,7 @@ def test_trusted_unpickle_active_emits_startup_warning(monkeypatch):
 def test_trusted_unpickle_warning_emitted_once_per_process(monkeypatch):
     """The trusted-unpickle warning is deduped so worker processes creating many
     resources do not repeat the same SECURITY message on every init."""
-    monkeypatch.setattr(ManagedResource, "_trusted_unpickle_warning_emitted", False)
+    monkeypatch.setattr(PickleSecurityMixin, "_trusted_unpickle_warning_emitted", False)
     with (
         ManagedResource.trusted_unpickle_scope(),
         warnings.catch_warnings(record=True) as caught,
@@ -570,6 +565,89 @@ async def test_reentrant_close_from_acleanup_fallback_does_not_deadlock():
             self.reentered = True
 
     res = ReentrantSyncOnly()
+    await asyncio.wait_for(res.aclose(), timeout=5)
+    assert res.reentered
+    assert res.closed
+
+
+@pytest.mark.asyncio
+async def test_sync_close_from_sibling_task_during_aclose_raises():
+    """Regression: close()'s same-thread reentrancy check used to rely on
+    thread identity alone. An async closer suspended at an await leaves its
+    loop thread free, so a *sibling task* calling sync close() matched the
+    closer's thread id, was mistaken for a reentrant call, and returned
+    immediately — silently breaking the "cleanup is done when close()
+    returns" barrier. It must refuse loudly instead (waiting would deadlock
+    the loop the closer needs to resume on)."""
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    class SlowAsyncClose(ManagedResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.cleanup_finished = False
+
+        async def _acleanup(self):
+            cleanup_started.set()
+            await release_cleanup.wait()
+            self.cleanup_finished = True
+
+    res = SlowAsyncClose()
+    closer = asyncio.create_task(res.aclose())
+    await asyncio.wait_for(cleanup_started.wait(), timeout=5)
+
+    with pytest.raises(RuntimeError, match="await aclose"):
+        res.close()
+    assert not res.cleanup_finished
+
+    release_cleanup.set()
+    await asyncio.wait_for(closer, timeout=5)
+    assert res.closed
+    assert res.cleanup_finished
+
+
+@pytest.mark.asyncio
+async def test_sync_close_from_loop_thread_during_fallback_window_raises():
+    """Regression: while aclose()'s to_thread fallback runs _cleanup() on a
+    worker (which adopts closer identity), a sync close() from the loop
+    thread used to take the waiter path and block the loop on
+    _closed_event.wait() — a hard deadlock, since the fallback's completion
+    callback needs that same loop to run. It must raise instead."""
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+
+    class SlowSyncOnly(ManagedResource):
+        def _cleanup(self):
+            cleanup_started.set()
+            release_cleanup.wait(timeout=5)
+
+    res = SlowSyncOnly()
+    closer = asyncio.create_task(res.aclose())
+    await asyncio.to_thread(cleanup_started.wait, 5)
+
+    with pytest.raises(RuntimeError, match="await aclose"):
+        res.close()
+
+    release_cleanup.set()
+    await asyncio.wait_for(closer, timeout=5)
+    assert res.closed
+
+
+@pytest.mark.asyncio
+async def test_sync_close_reentrant_from_within_acleanup_task_still_returns():
+    """A sync close() called from *inside* the async closer's own _acleanup()
+    (same task, same thread) is genuine reentrancy and must return quietly,
+    not raise — task identity is what distinguishes it from a sibling task."""
+    class ReentrantMixed(ManagedResource):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.reentered = False
+
+        async def _acleanup(self):
+            self.close()  # same task as the aclose() closer
+            self.reentered = True
+
+    res = ReentrantMixed()
     await asyncio.wait_for(res.aclose(), timeout=5)
     assert res.reentered
     assert res.closed

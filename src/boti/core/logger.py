@@ -30,6 +30,13 @@ from boti.core.project import ProjectService
 _LogExtra = dict[str, Any] | None
 
 
+def _default_formatter() -> logging.Formatter:
+    return logging.Formatter(
+        "[%(asctime)s][%(levelname)s][%(name)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
 class Logger:
     """
     Thread-safe, non-blocking Logger designed for high-performance toolkits.
@@ -192,13 +199,13 @@ class Logger:
 
         log_file_path = self.log_dir / f"{self.log_file}.log"
         self._ensure_secure_log_file(log_file_path)
+        self._attach_queue_and_destinations(log_file_path)
+
+    def _attach_queue_and_destinations(self, log_file_path: Path) -> None:
+        """Wire this logger into the global queue listener and register its destinations."""
         file_key = (self.logger_name, str(log_file_path.resolve()))
         console_key = (self.logger_name, "__console__")
-
-        fmt = logging.Formatter(
-            "[%(asctime)s][%(levelname)s][%(name)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        fmt = _default_formatter()
 
         with LoggerRuntime._lock:
             LoggerRuntime.ensure_listener()
@@ -218,10 +225,7 @@ class Logger:
 
     def _setup_stderr_only_handler(self) -> None:
         """Attach a simple stderr handler when file logging is unavailable."""
-        fmt = logging.Formatter(
-            "[%(asctime)s][%(levelname)s][%(name)s] %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        fmt = _default_formatter()
         with LoggerRuntime._lock:
             LoggerRuntime.ensure_listener()
             if not any(isinstance(h, QueueHandler) for h in self._core.handlers):

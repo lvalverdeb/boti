@@ -10,7 +10,7 @@ from __future__ import annotations
 import tempfile
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 __all__ = ["SecureResource"]
 
@@ -104,7 +104,7 @@ class SecureResource(ManagedResource):
             )
         return resolved
 
-    def open_secure(self, path: str | Path, mode: str = "r", **kwargs: Any):
+    def open_secure(self, path: str | Path, mode: str = "r", **kwargs: Any) -> IO[Any]:
         """
         Opens a file securely, enforcing sandbox constraints.
         

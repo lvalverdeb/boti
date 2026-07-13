@@ -9,6 +9,15 @@ python examples/async_resource.py            # Native async cleanup
 python examples/managed_resource_pickle.py  # Pickle/unpickle with trusted_unpickle_scope
 python examples/resource_error_recovery.py  # Cleanup-failure suppression vs propagation
 
+# ── Composable lifecycle mixins (LifecycleCore/FsspecMixin/PickleSecurityMixin) ──
+python examples/lifecycle_core_standalone.py       # LifecycleCore alone: close barrier, GC warning
+python examples/fsspec_mixin_standalone.py         # FsspecMixin alone: lazy fs, single-flight init
+python examples/pickle_security_mixin_standalone.py # PickleSecurityMixin alone: pickle/unpickle gating
+
+# ── Agent ────────────────────────────────────────────────────────────
+python examples/agent_basics.py              # Agent/AgentConfig: async tool calls, agent swarms,
+                                             #   sync-only cleanup fallback, GC warning
+
 # ── Filesystem ──────────────────────────────────────────────────────
 python examples/filesystem_resource.py       # fsspec-backed ManagedResource
 python examples/filesystem_config.py         # FilesystemConfig (local, memory, S3, adapters)
@@ -52,6 +61,10 @@ python examples/end_to_end_pipeline.py       # Combined: ProjectService + Secure
 | `async_resource.py` | `ManagedResource` — `_acleanup`, `async with`, `aclose()` |
 | `managed_resource_pickle.py` | `ManagedResource.__getstate__`/`__setstate__`, `allow_pickle`, `trusted_unpickle_scope()`, `_restore_runtime_state()`, `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE` |
 | `resource_error_recovery.py` | `ManagedResource.close()`/`__exit__` — cleanup-error suppression when a user exception is already propagating vs. propagation on a clean body, `suppress_errors` symmetry, cleanup failures logged even when suppressed |
+| `lifecycle_core_standalone.py` | `LifecycleCore` composed with no other boti class — close barrier across threads, reentrant `close()`, sync/async context managers, GC leak warning |
+| `fsspec_mixin_standalone.py` | `FsspecMixin` composed directly with `LifecycleCore` — lazy `require_fs()`, single-flight `fs_factory`, release-on-close via `_release_transient_state()`, `RuntimeError` when unconfigured |
+| `pickle_security_mixin_standalone.py` | `PickleSecurityMixin` composed directly with `LifecycleCore` (no fs at all) — `allow_pickle` gate, `trusted_unpickle_scope()`, `__getstate__` degrading safely with no fs-owned keys present |
+| `agent_basics.py` | `Agent`, `AgentConfig` — async tool-calling under `_assert_open()`, a concurrent multi-agent swarm closed via `asyncio.gather`, a sync-only agent relying on `aclose()`'s `_cleanup()` thread fallback, `verbose`/`debug` logger levels, GC leak warning |
 | `filesystem_resource.py` | `ManagedResource` — `require_fs()`, `fs_factory`, `_owns_fs` |
 | `filesystem_config.py` | `FilesystemConfig`, `create_filesystem()`, `FilesystemAdapter`, `storage_path`, `to_fsspec_options()`, S3/SSRF validation |
 | `filesystem_supported_backends.py` | `_ALLOWED_FS_TYPES`, `FilesystemAdapter.get_filesystem()` for all 23 backends |

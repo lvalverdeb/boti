@@ -6,6 +6,8 @@ security sandboxing, filesystem adapters, settings helpers, and shared models.
 """
 
 __all__ = [
+    "Agent",
+    "AgentConfig",
     "FilesystemAdapter",
     "FilesystemConfig",
     "Logger",
@@ -23,6 +25,7 @@ __all__ = [
     "load_prefixed_model",
 ]
 
+from boti.core.agent import Agent, AgentConfig
 from boti.core.filesystem import (
     FilesystemAdapter,
     FilesystemConfig,

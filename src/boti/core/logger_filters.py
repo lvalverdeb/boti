@@ -86,6 +86,11 @@ class PIISecretFilter(logging.Filter):
             }
         return args
 
+    # Security-sensitive PII redaction: the dispatch across 8 container types
+    # plus the cycle-detection DoS guard is inherent complexity, and this is
+    # the one place a refactor mistake could leak secrets into logs. Do not
+    # restructure it to satisfy a linter threshold.
+    # spaghetti-ignore[high-complexity,excessive-returns]: see above
     def _redact_value(self, value: Any, visited: dict[int, Any] | None = None) -> Any:
         if visited is None:
             visited = {}

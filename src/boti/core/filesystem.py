@@ -242,46 +242,80 @@ class FilesystemConfig(BaseModel):
             directly to fsspec and let it go out of scope immediately.
         """
         options = dict(self.fs_options)
-
-        if self.fs_type in {"s3", "s3a"}:
-            if self.fs_key:
-                options["key"] = self.fs_key
-            if self.fs_secret is not None:
-                options["secret"] = self.fs_secret.get_secret_value()
-            if self.fs_token is not None:
-                options["token"] = self.fs_token.get_secret_value()
-
-            client_kwargs: dict[str, Any] = dict(options.get("client_kwargs", {}))
-            if self.fs_endpoint:
-                client_kwargs["endpoint_url"] = self.fs_endpoint
-            if self.fs_region:
-                client_kwargs["region_name"] = self.fs_region
-            # Inject connect/read timeouts via botocore config if not already set.
-            if self.fs_connect_timeout is not None and "connect_timeout" not in client_kwargs:
-                client_kwargs["connect_timeout"] = self.fs_connect_timeout
-            if self.fs_read_timeout is not None and "read_timeout" not in client_kwargs:
-                client_kwargs["read_timeout"] = self.fs_read_timeout
-            if client_kwargs:
-                options["client_kwargs"] = client_kwargs
-
-            config_kwargs: dict[str, Any] = dict(options.get("config_kwargs", {}))
-            if "verify" not in options:
-                options["verify"] = self.fs_verify_ssl
-            if config_kwargs:
-                options["config_kwargs"] = config_kwargs
-
-        elif self.fs_type in {"http", "https"}:
-            # aiohttp / requests accept a unified timeout value.
-            if "timeout" not in options:
-                timeout = self.fs_read_timeout or self.fs_connect_timeout
-                if timeout is not None:
-                    options["timeout"] = timeout
-
-        elif self.fs_type in {"ftp", "sftp"}:
-            if self.fs_connect_timeout is not None and "timeout" not in options:
-                options["timeout"] = self.fs_connect_timeout
-
+        builder = _FSSPEC_OPTIONS_BUILDERS.get(self.fs_type)
+        if builder is not None:
+            options = builder(self, options)
         return options
+
+
+def _s3_credential_options(config: FilesystemConfig, options: dict[str, Any]) -> dict[str, Any]:
+    if config.fs_key:
+        options["key"] = config.fs_key
+    if config.fs_secret is not None:
+        options["secret"] = config.fs_secret.get_secret_value()
+    if config.fs_token is not None:
+        options["token"] = config.fs_token.get_secret_value()
+    return options
+
+
+def _s3_client_and_config_kwargs(
+    config: FilesystemConfig, options: dict[str, Any]
+) -> dict[str, Any]:
+    client_kwargs: dict[str, Any] = dict(options.get("client_kwargs", {}))
+    if config.fs_endpoint:
+        client_kwargs["endpoint_url"] = config.fs_endpoint
+    if config.fs_region:
+        client_kwargs["region_name"] = config.fs_region
+    # Inject connect/read timeouts via botocore config if not already set.
+    if config.fs_connect_timeout is not None and "connect_timeout" not in client_kwargs:
+        client_kwargs["connect_timeout"] = config.fs_connect_timeout
+    if config.fs_read_timeout is not None and "read_timeout" not in client_kwargs:
+        client_kwargs["read_timeout"] = config.fs_read_timeout
+    if client_kwargs:
+        options["client_kwargs"] = client_kwargs
+
+    config_kwargs: dict[str, Any] = dict(options.get("config_kwargs", {}))
+    if "verify" not in options:
+        options["verify"] = config.fs_verify_ssl
+    if config_kwargs:
+        options["config_kwargs"] = config_kwargs
+
+    return options
+
+
+def _s3_fsspec_options(config: FilesystemConfig, options: dict[str, Any]) -> dict[str, Any]:
+    options = _s3_credential_options(config, options)
+    return _s3_client_and_config_kwargs(config, options)
+
+
+def _http_fsspec_options(config: FilesystemConfig, options: dict[str, Any]) -> dict[str, Any]:
+    # aiohttp / requests accept a unified timeout value.
+    if "timeout" not in options:
+        timeout = config.fs_read_timeout or config.fs_connect_timeout
+        if timeout is not None:
+            options["timeout"] = timeout
+    return options
+
+
+def _ftp_fsspec_options(config: FilesystemConfig, options: dict[str, Any]) -> dict[str, Any]:
+    if config.fs_connect_timeout is not None and "timeout" not in options:
+        options["timeout"] = config.fs_connect_timeout
+    return options
+
+
+_FsspecOptionsBuilder = Callable[[FilesystemConfig, dict[str, Any]], dict[str, Any]]
+
+# Keyed by exact fs_type string (validated against _ALLOWED_FS_TYPES), so a
+# plain dict lookup is safe and unambiguous — unlike an isinstance-based
+# dispatch, there's no subtype/alias overlap to worry about here.
+_FSSPEC_OPTIONS_BUILDERS: dict[str, _FsspecOptionsBuilder] = {
+    "s3": _s3_fsspec_options,
+    "s3a": _s3_fsspec_options,
+    "http": _http_fsspec_options,
+    "https": _http_fsspec_options,
+    "ftp": _ftp_fsspec_options,
+    "sftp": _ftp_fsspec_options,
+}
 
 
 def create_filesystem(config: FilesystemConfig) -> fsspec.AbstractFileSystem:
@@ -297,10 +331,8 @@ _RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
 )
 
 
-def _normalize_s3_fsspec_options(options: dict[str, Any]) -> dict[str, Any]:
-    """Normalize S3 option aliases so downstream callers can pass legacy/new keys."""
-    normalized = dict(options)
-
+def _apply_s3_credential_aliases(normalized: dict[str, Any]) -> None:
+    """Map legacy credential key names onto the s3fs names, never overriding."""
     alias_pairs = (
         ("access_key", "key"),
         ("secret_key", "secret"),
@@ -310,10 +342,9 @@ def _normalize_s3_fsspec_options(options: dict[str, Any]) -> dict[str, Any]:
         if target not in normalized and source in normalized:
             normalized[target] = normalized[source]
 
-    verify_value = normalized.get("verify")
-    if "verify_ssl" in normalized:
-        verify_value = normalized.get("verify_ssl")
 
+def _normalized_s3_client_kwargs(normalized: dict[str, Any]) -> dict[str, Any]:
+    """Assemble client_kwargs from endpoint/region/verify aliases; existing keys win."""
     client_kwargs: dict[str, Any] = dict(normalized.get("client_kwargs", {}))
     if "endpoint_url" not in client_kwargs:
         endpoint = normalized.get("endpoint_override") or normalized.get("endpoint")
@@ -323,16 +354,35 @@ def _normalize_s3_fsspec_options(options: dict[str, Any]) -> dict[str, Any]:
         region = normalized.get("region")
         if region is not None:
             client_kwargs["region_name"] = region
+
+    verify_value = normalized.get("verify")
+    if "verify_ssl" in normalized:
+        verify_value = normalized.get("verify_ssl")
     # s3fs 2026.3.0 may forward unknown top-level kwargs to AioSession,
     # which does not accept "verify". Keep SSL verification in client kwargs.
     if verify_value is not None and "verify" not in client_kwargs:
         client_kwargs["verify"] = verify_value
 
-    config_kwargs: dict[str, Any] = dict(normalized.get("config_kwargs", {}))
+    return client_kwargs
+
+
+def _relocate_botocore_timeouts(
+    client_kwargs: dict[str, Any], config_kwargs: dict[str, Any]
+) -> None:
     # Some external adapters incorrectly place botocore timeouts in client_kwargs.
     for timeout_key in ("connect_timeout", "read_timeout"):
         if timeout_key not in config_kwargs and timeout_key in client_kwargs:
             config_kwargs[timeout_key] = client_kwargs.pop(timeout_key)
+
+
+def _normalize_s3_fsspec_options(options: dict[str, Any]) -> dict[str, Any]:
+    """Normalize S3 option aliases so downstream callers can pass legacy/new keys."""
+    normalized = dict(options)
+    _apply_s3_credential_aliases(normalized)
+
+    client_kwargs = _normalized_s3_client_kwargs(normalized)
+    config_kwargs: dict[str, Any] = dict(normalized.get("config_kwargs", {}))
+    _relocate_botocore_timeouts(client_kwargs, config_kwargs)
 
     if client_kwargs:
         normalized["client_kwargs"] = client_kwargs
