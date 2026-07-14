@@ -51,7 +51,7 @@ Services that accept file paths from user input or external APIs are a recurring
 
 ### Multiprocessing workloads
 
-Shipping resource configuration to a `multiprocessing.Pool` worker is one of Python's most common pain points. Boti's two-factor pickle gating (`allow_pickle` in config + `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE` env var) lets you serialize a resource and send it to a worker without manual pickle shims. The `_restore_runtime_state` hook re-establishes transient connections on the worker side.
+Shipping resource configuration to a `multiprocessing.Pool` worker is one of Python's most common pain points. Boti's two-factor pickle gating (`allow_pickle` in config + `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE` env var) lets you serialize a resource and send it to a worker without manual pickle shims. The `_restore_runtime_state` hook is where your subclass re-establishes transient connections on the worker side.
 
 ### ETL pipelines with hybrid local/remote storage
 

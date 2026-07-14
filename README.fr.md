@@ -51,7 +51,7 @@ Les services qui acceptent des chemins de fichier provenant d'entrées utilisate
 
 ### Travaux multiprocessus
 
-Envoyer la configuration de ressources à un worker `multiprocessing.Pool` est l'un des points faibles les plus courants de Python. Le double verrouillage pickle de Boti (`allow_pickle` dans la configuration + variable d'environnement `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`) permet de sérialiser une ressource et de l'envoyer à un worker sans shims pickle manuels. Le hook `_restore_runtime_state` rétablit les connexions transitoires du côté du worker.
+Envoyer la configuration de ressources à un worker `multiprocessing.Pool` est l'un des points faibles les plus courants de Python. Le double verrouillage pickle de Boti (`allow_pickle` dans la configuration + variable d'environnement `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`) permet de sérialiser une ressource et de l'envoyer à un worker sans shims pickle manuels. Le hook `_restore_runtime_state` est l'endroit où votre sous-classe rétablit les connexions transitoires du côté du worker.
 
 ### Pipelines ETL avec stockage hybride local/distant
 

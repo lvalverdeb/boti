@@ -51,7 +51,7 @@ Los servicios que aceptan rutas de archivo de entrada del usuario o APIs externa
 
 ### Trabajos multiprocesamiento
 
-Enviar configuración de recursos a un worker de `multiprocessing.Pool` es uno de los puntos débiles más comunes de Python. El doble gateo de pickle de Boti (`allow_pickle` en la configuración + variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`) permite serializar un recurso y enviarlo a un worker sin shims manuales de pickle. El hook `_restore_runtime_state` restablece las conexiones transitorias en el lado del worker.
+Enviar configuración de recursos a un worker de `multiprocessing.Pool` es uno de los puntos débiles más comunes de Python. El doble gateo de pickle de Boti (`allow_pickle` en la configuración + variable de entorno `BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`) permite serializar un recurso y enviarlo a un worker sin shims manuales de pickle. El hook `_restore_runtime_state` es donde tu subclase restablece las conexiones transitorias en el lado del worker.
 
 ### Pipelines ETL con almacenamiento híbrido local/remoto
 
