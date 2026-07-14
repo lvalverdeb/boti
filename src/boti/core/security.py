@@ -12,6 +12,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 __all__ = [
+    "has_dunder_identifier",
     "is_secure_path",
     "is_valid_identifier",
     "is_valid_dotted_identifier",
@@ -76,6 +77,40 @@ def is_valid_dotted_identifier(name: str) -> bool:
         return False
     parts = name.split(".")
     return all(is_valid_identifier(part) for part in parts)
+
+
+_IDENTIFIER_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def has_dunder_identifier(expr: str) -> bool:
+    """
+    Checks whether *expr* contains a dunder-wrapped identifier token, e.g.
+    ``__class__``, ``__globals__``, or ``__import__`` — the building block of
+    every publicly documented Python eval/exec sandbox-escape technique (see
+    CVE-2024-9880 for a pandas ``DataFrame.eval()``/``query()`` example: chained
+    dunder attribute access such as ``().__class__.__bases__[0].__subclasses__()``
+    reaching arbitrary code execution).
+
+    Use this to gate any string that is about to be evaluated or executed
+    dynamically (``eval``, ``exec``, ``DataFrame.eval``/``query``, template
+    expression languages, etc.) where the string may come from a source you
+    only partially trust.
+
+    Matches whole identifier tokens, not a raw substring test for ``"__"`` —
+    so ``x.__class__`` and bare ``__import__(...)`` are flagged, but a
+    legitimate identifier that merely contains ``__`` in the middle, such as
+    a column or variable named ``a__b``, is not.
+
+    Args:
+        expr: The expression string to scan.
+
+    Returns:
+        bool: True if a dunder-wrapped identifier token is present.
+    """
+    return any(
+        token.startswith("__") and token.endswith("__")
+        for token in _IDENTIFIER_TOKEN_PATTERN.findall(expr)
+    )
 
 
 _ENV_VAR_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

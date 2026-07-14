@@ -12,7 +12,11 @@ from boti.core import ProjectService, SecureResource
 from boti.core import project as project_module
 from boti.core import secure_io as secure_io_module
 from boti.core.models import ResourceConfig
-from boti.core.security import is_valid_dotted_identifier, is_valid_identifier
+from boti.core.security import (
+    has_dunder_identifier,
+    is_valid_dotted_identifier,
+    is_valid_identifier,
+)
 
 
 def test_project_root_detection(temp_project_root):
@@ -197,6 +201,38 @@ class TestIdentifierRegexAnchorBypass:
     def test_dotted_identifier_rejects_trailing_newline(self):
         assert is_valid_dotted_identifier("pkg.module") is True
         assert is_valid_dotted_identifier("pkg.module\n") is False
+
+
+class TestHasDunderIdentifier:
+    """`has_dunder_identifier` gates strings before they reach eval/exec-like
+    sinks (e.g. boti-data's RowFilter/DerivedColumn, which pass expressions
+    to pandas DataFrame.eval()). It replaced a raw substring test for "__",
+    which rejected legitimate identifiers that merely contain "__" in the
+    middle (e.g. a column named "a__b") while still being no stronger against
+    an attacker than tokenizing — this test locks down both the true
+    positives (dunder-wrapped tokens, the building block of documented eval
+    sandbox-escape chains like CVE-2024-9880) and the false positives the
+    old substring test would have produced."""
+
+    def test_flags_dunder_attribute_access(self):
+        assert has_dunder_identifier("x.__class__") is True
+        assert has_dunder_identifier("().__class__.__bases__[0].__subclasses__()") is True
+
+    def test_flags_bare_dunder_name(self):
+        assert has_dunder_identifier('__import__("os")') is True
+        assert has_dunder_identifier("__class__") is True
+
+    def test_allows_identifier_with_embedded_double_underscore(self):
+        assert has_dunder_identifier("a__b > 1") is False
+        assert has_dunder_identifier("col__suffix == 1") is False
+
+    def test_allows_identifier_with_only_leading_or_trailing_double_underscore(self):
+        assert has_dunder_identifier("__internal_id > 0") is False
+        assert has_dunder_identifier("trailing__ > 0") is False
+
+    def test_allows_expression_with_no_dunder_at_all(self):
+        assert has_dunder_identifier("value > 1000") is False
+        assert has_dunder_identifier("arrival_date + pd.Timedelta(days=7)") is False
 
 
 class TestGetSecurePathFailsClosed:

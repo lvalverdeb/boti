@@ -18,6 +18,7 @@ __all__ = [
     "SqlDatabaseSettings",
     "add_endpoint_to_allowlist",
     "create_filesystem",
+    "has_dunder_identifier",
     "is_secure_path",
     "is_valid_dotted_identifier",
     "is_valid_env_var_name",
@@ -38,6 +39,7 @@ from boti.core.models import ResourceConfig
 from boti.core.project import ProjectService
 from boti.core.secure_io import SecureResource
 from boti.core.security import (
+    has_dunder_identifier,
     is_secure_path,
     is_valid_dotted_identifier,
     is_valid_env_var_name,
