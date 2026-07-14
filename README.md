@@ -1,6 +1,6 @@
 # boti
 
-[English](README.md) · [Español](README.es.md) · [Français](README.fr.md)
+[English](https://github.com/lvalverdeb/boti/blob/main/README.md) · [Español](https://github.com/lvalverdeb/boti/blob/main/README.es.md) · [Français](https://github.com/lvalverdeb/boti/blob/main/README.fr.md)
 
 `boti` stands for **Base Object Transformation Interface**.
 

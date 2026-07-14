@@ -1,3 +1,5 @@
+REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || dirname $(realpath $(lastword $(MAKEFILE_LIST)))/..)
+
 .PHONY: help clean build upload upload-test install-dev test lint format typecheck coverage check
 
 LOAD_ENV = if [ -f .env ]; then set -a; . .env; set +a; fi
@@ -15,19 +17,21 @@ help:
 	@echo "  format       - Run ruff formatter"
 	@echo "  typecheck    - Run mypy type checker"
 	@echo "  coverage     - Run tests with coverage report"
-	@echo "  check        - Dry-run publish to validate the package"
+	@echo "  check        - Lint + tests + dry-run publish"
 
 clean:
-	rm -rf build/ dist/ *.egg-info src/*.egg-info htmlcov/ .coverage
+	rm -rf $(REPO_ROOT)/dist/ $(REPO_ROOT)/build/ src/*.egg-info htmlcov/ .coverage
+	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 
 build: clean
 	uv build
 
 upload: build
-	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --token "$$UV_PUBLISH_TOKEN" dist/*
+	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --token "$$UV_PUBLISH_TOKEN" $$(ls $(REPO_ROOT)/dist/boti-*)
 
 upload-test: build
-	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --publish-url https://test.pypi.org/legacy/ --token "$$UV_PUBLISH_TOKEN" dist/*
+	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --publish-url https://test.pypi.org/legacy/ --token "$$UV_PUBLISH_TOKEN" $$(ls $(REPO_ROOT)/dist/boti-*)
 
 install-dev:
 	uv sync --group dev
@@ -47,5 +51,5 @@ typecheck:
 coverage:
 	uv run pytest --cov=boti --cov-report=term-missing --cov-report=html
 
-check: build
-	uv publish --dry-run dist/*
+check: lint test
+	@$(LOAD_ENV); uv publish --dry-run $$(ls $(REPO_ROOT)/dist/boti-*)
