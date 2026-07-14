@@ -1,4 +1,8 @@
-REPO_ROOT := $(shell git rev-parse --show-toplevel 2>/dev/null || dirname $(realpath $(lastword $(MAKEFILE_LIST)))/..)
+# boti is its own git repo nested inside the uv workspace root, so
+# `git rev-parse --show-toplevel` would return boti's own root, not
+# the workspace root where `uv build` actually writes dist/ — derive it
+# from the Makefile's own location instead (always one level up).
+REPO_ROOT := $(shell realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST))))..)
 
 .PHONY: help clean build upload upload-test install-dev test lint format typecheck coverage check
 
