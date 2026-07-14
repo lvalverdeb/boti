@@ -13,7 +13,6 @@ logs/
 .pypirc
 *.whl
 *.tar.gz
-.github/
 .ruff_cache/
 .mypy_cache/
 .hypothesis/
