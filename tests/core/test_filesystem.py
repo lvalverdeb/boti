@@ -78,7 +78,10 @@ def test_filesystem_config_file_storage_path_unchanged():
 
 def test_filesystem_config_all_allowed_backends():
     """Spot-check that all well-known allowed backends pass validation."""
-    for fs_type in ("file", "local", "memory", "s3", "gcs", "az", "abfs", "ftp", "sftp", "http", "https"):
+    allowed_backends = (
+        "file", "local", "memory", "s3", "gcs", "az", "abfs", "ftp", "sftp", "http", "https",
+    )
+    for fs_type in allowed_backends:
         config = FilesystemConfig(fs_type=fs_type, fs_path="some/path")
         assert config.fs_type == fs_type
 
@@ -363,7 +366,9 @@ def test_filesystem_config_s3_default_timeouts():
 
 
 def test_filesystem_config_s3_custom_timeouts():
-    config = FilesystemConfig(fs_type="s3", fs_path="bucket", fs_connect_timeout=5.0, fs_read_timeout=60.0)
+    config = FilesystemConfig(
+        fs_type="s3", fs_path="bucket", fs_connect_timeout=5.0, fs_read_timeout=60.0
+    )
     opts = config.to_fsspec_options()
     assert opts["client_kwargs"]["connect_timeout"] == 5.0
     assert opts["client_kwargs"]["read_timeout"] == 60.0
@@ -371,7 +376,9 @@ def test_filesystem_config_s3_custom_timeouts():
 
 def test_filesystem_config_s3_timeout_none_disables():
     """Setting timeouts to None must not inject timeout keys."""
-    config = FilesystemConfig(fs_type="s3", fs_path="bucket", fs_connect_timeout=None, fs_read_timeout=None)
+    config = FilesystemConfig(
+        fs_type="s3", fs_path="bucket", fs_connect_timeout=None, fs_read_timeout=None
+    )
     opts = config.to_fsspec_options()
     assert "connect_timeout" not in opts.get("client_kwargs", {})
     assert "read_timeout" not in opts.get("client_kwargs", {})
@@ -459,7 +466,9 @@ def test_filesystem_adapter_accepts_retry_params():
 # ---------------------------------------------------------------------------
 
 
-def test_create_filesystem_s3_compat_moves_timeouts_to_config_kwargs(monkeypatch: pytest.MonkeyPatch):
+def test_create_filesystem_s3_compat_moves_timeouts_to_config_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """S3 creation path remaps misplaced timeout keys for s3fs compatibility."""
     captured: dict[str, object] = {}
 
@@ -513,7 +522,9 @@ def test_create_filesystem_s3_compat_accepts_alias_credentials(monkeypatch: pyte
     assert kwargs["client_kwargs"]["region_name"] == "us-east-1"
 
 
-def test_create_filesystem_s3_compat_moves_verify_into_client_kwargs(monkeypatch: pytest.MonkeyPatch):
+def test_create_filesystem_s3_compat_moves_verify_into_client_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+):
     captured: dict[str, object] = {}
 
     def fake_filesystem(protocol: str, **kwargs: object) -> object:

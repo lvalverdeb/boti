@@ -244,15 +244,16 @@ class TestGetSecurePathFailsClosed:
 
     def test_null_byte_raises_permission_error_not_value_error(self, temp_project_root):
         config = ResourceConfig(project_root=temp_project_root)
-        with SecureResource(config=config) as res:
-            with pytest.raises(PermissionError, match="could not be resolved"):
-                res.get_secure_path("valid\x00.txt")
+        with (
+            SecureResource(config=config) as res,
+            pytest.raises(PermissionError, match="could not be resolved"),
+        ):
+            res.get_secure_path("valid\x00.txt")
 
     def test_null_byte_blocked_through_open_secure(self, temp_project_root):
         config = ResourceConfig(project_root=temp_project_root)
-        with SecureResource(config=config) as res:
-            with pytest.raises(PermissionError):
-                res.write_text_secure("valid\x00.txt", "content")
+        with SecureResource(config=config) as res, pytest.raises(PermissionError):
+            res.write_text_secure("valid\x00.txt", "content")
 
 
 class TestSandboxBypassTechniques:
@@ -285,9 +286,8 @@ class TestSandboxBypassTechniques:
         link = root / "escape_link"
         link.symlink_to(secret)
 
-        with res:
-            with pytest.raises(PermissionError):
-                res.get_secure_path(link)
+        with res, pytest.raises(PermissionError):
+            res.get_secure_path(link)
 
     def test_sibling_directory_prefix_confusion_is_blocked(self, tmp_path, monkeypatch):
         """A sibling directory whose string form merely starts with the
@@ -301,9 +301,8 @@ class TestSandboxBypassTechniques:
         evil_file = sibling_evil / "x.txt"
         evil_file.write_text("evil")
 
-        with res:
-            with pytest.raises(PermissionError):
-                res.get_secure_path(evil_file)
+        with res, pytest.raises(PermissionError):
+            res.get_secure_path(evil_file)
 
     def test_relative_traversal_escaping_root_via_dotdot_is_blocked(self, tmp_path, monkeypatch):
         """'..' segments in a path that otherwise starts inside the root
@@ -316,6 +315,5 @@ class TestSandboxBypassTechniques:
         (outside / "secret.txt").write_text("TOP SECRET")
 
         traversal = nested / ".." / ".." / ".." / "outside" / "secret.txt"
-        with res:
-            with pytest.raises(PermissionError):
-                res.get_secure_path(traversal)
+        with res, pytest.raises(PermissionError):
+            res.get_secure_path(traversal)

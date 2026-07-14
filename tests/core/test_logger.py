@@ -106,7 +106,7 @@ def test_logger_non_blocking(temp_log_dir):
             logger.info(f"Thread {threading.current_thread().name} log {i}")
 
     threads = []
-    for i in range(10):
+    for _i in range(10):
         t = threading.Thread(target=log_task, args=(100,))
         threads.append(t)
         t.start()
@@ -158,7 +158,11 @@ def test_default_logger_reuses_cached_instance(temp_project_root):
 
 
 def test_default_logger_uses_boti_fallback_name(monkeypatch, temp_project_root):
-    monkeypatch.setattr(logger_module.sys, "_getframe", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError()))
+    monkeypatch.setattr(
+        logger_module.sys,
+        "_getframe",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError()),
+    )
 
     logger = Logger.default_logger(base_dir=temp_project_root)
 
@@ -271,7 +275,7 @@ def test_logger_toctou_symlink_attack_rejected(temp_log_dir):
         )
         # Assert logger initialization raises ValueError tracking the symlink block
         with pytest.raises(ValueError, match="must not be a symlink"):
-            logger = Logger(config)
+            Logger(config)
 
 
 def test_safe_rotating_file_handler_rejects_symlink_swap(temp_log_dir):

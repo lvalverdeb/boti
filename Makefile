@@ -55,5 +55,5 @@ typecheck:
 coverage:
 	uv run pytest --cov=boti --cov-report=term-missing --cov-report=html
 
-check: lint test
-	@$(LOAD_ENV); uv publish --dry-run $$(ls $(REPO_ROOT)/dist/boti-*)
+check: lint test build
+	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --dry-run --token "$$UV_PUBLISH_TOKEN" $$(ls $(REPO_ROOT)/dist/boti-*)
