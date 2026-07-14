@@ -24,7 +24,7 @@ def test_project_root_detection(temp_project_root):
     # Test from within a subdirectory
     sub = temp_project_root / "src" / "deep" / "path"
     sub.mkdir(parents=True)
-    
+
     root = ProjectService.detect_project_root(start_path=sub)
     assert root == temp_project_root.resolve()
 
@@ -69,11 +69,11 @@ def test_secure_resource_sandboxing(temp_project_root):
         # Valid path
         valid = temp_project_root / "valid.txt"
         assert res.get_secure_path(valid) == valid.resolve()
-        
+
         # Invalid path (outside root)
         with pytest.raises(PermissionError, match="outside the configured sandbox roots"):
             res.get_secure_path("/etc/passwd")
-            
+
         # Traversal attempt (definitely outside)
         with pytest.raises(PermissionError):
             res.get_secure_path("/System/not_allowed")

@@ -1,7 +1,7 @@
 """
 Lifecycle management base for Boti resources.
 
-Provides the ManagedResource abstract base class to standardize 
+Provides the ManagedResource abstract base class to standardize
 initialization, cleanup, and context management across the toolkit.
 """
 
@@ -45,7 +45,7 @@ class ManagedResource(PickleSecurityMixin, FsspecMixin, LifecycleCore):
             raise TypeError(
                 f"Unexpected config override(s) for {self.__class__.__name__}: {unexpected_keys}"
             )
-        
+
         self.config = config
         self.verbose = config.verbose
         self.debug = config.debug

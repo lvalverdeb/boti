@@ -1,7 +1,7 @@
 """
 Sandboxed I/O resource for Boti Tools.
 
-Provides the SecureResource class which enforces path sandboxing 
+Provides the SecureResource class which enforces path sandboxing
 to prevent path traversal attacks during file operations.
 """
 
@@ -28,14 +28,14 @@ class SecureResource(ManagedResource):
     temporary directory, or explicitly configured extra allowed paths to
     prevent path traversal.
     """
-    
+
     def __init__(self, config: ResourceConfig | None = None, **kwargs: Any) -> None:
         """
         Initialize the SecureResource.
         Sets the project root for sandboxing context.
         """
         super().__init__(config=config, **kwargs)
-        
+
         # Use config for project root, fallback to auto-detection
         root = self.config.project_root or ProjectService.detect_project_root()
         self.project_root = Path(root).resolve()
@@ -68,13 +68,13 @@ class SecureResource(ManagedResource):
     def get_secure_path(self, path: str | Path) -> Path:
         """
         Validates and resolves a path within the configured sandbox roots.
-        
+
         Args:
             path: The path to secure.
-            
+
         Returns:
             Path: The resolved absolute Path object.
-            
+
         Raises:
             PermissionError: If the path is outside the configured sandbox roots,
                 or cannot be resolved at all (e.g. contains a NUL byte, hits a
@@ -107,12 +107,12 @@ class SecureResource(ManagedResource):
     def open_secure(self, path: str | Path, mode: str = "r", **kwargs: Any) -> IO[Any]:
         """
         Opens a file securely, enforcing sandbox constraints.
-        
+
         Args:
             path: The path to the file.
             mode: The file mode.
             **kwargs: Arguments for the open() function.
-            
+
         Returns:
             File handle.
         """

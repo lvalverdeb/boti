@@ -37,7 +37,7 @@ def test_managed_resource_sync_context():
     with res as r:
         assert not r.closed
         assert not r.cleaned_up_sync
-    
+
     assert res.closed
     assert res.cleaned_up_sync
 
@@ -49,7 +49,7 @@ async def test_managed_resource_async_context():
     async with res as r:
         assert not r.closed
         assert not r.cleaned_up_async
-    
+
     assert res.closed
     assert res.cleaned_up_async
 

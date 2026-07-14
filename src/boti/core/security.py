@@ -24,7 +24,7 @@ __all__ = [
 def is_secure_path(target_file: str | Path, allowed_dirs: Iterable[str | Path]) -> bool:
     """
     Verifies if a target path resides within an allowed sandbox directory.
-    
+
     Uses path resolution to prevent traversal attacks and ensures the resolved
     path is relative to one of the trusted base directories.
 
@@ -52,7 +52,7 @@ def is_secure_path(target_file: str | Path, allowed_dirs: Iterable[str | Path]) 
 def is_valid_identifier(name: str) -> bool:
     """
     Checks if a string is a valid Python identifier.
-    
+
     This is used to prevent code injection when generating code dynamically
     or handling user-supplied names in templates.
 

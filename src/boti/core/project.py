@@ -204,5 +204,5 @@ class ProjectService:
 
             for key, value in dotenv_values.items():
                 os.environ[key] = value
-        
+
         return target

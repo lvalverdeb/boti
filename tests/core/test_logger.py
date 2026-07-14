@@ -23,17 +23,17 @@ def test_logger_pii_redaction(temp_log_dir):
         log_file="pii_test"
     )
     logger = Logger(config)
-    
+
     # Log something sensitive
     logger.info("User password is: secret123")
     logger.info("My api_key is 'abc-xyz'")
-    
+
     # Give the listener a moment to process the queue
     time.sleep(0.5)
-    
+
     log_file = temp_log_dir / "pii_test.log"
     content = log_file.read_text()
-    
+
     assert "[REDACTED SENSITIVE DATA]" in content
     assert "secret123" not in content
     assert "abc-xyz" not in content
@@ -91,7 +91,7 @@ def test_logger_pii_redaction_masks_sensitive_extra_fields():
 
 def test_logger_non_blocking(temp_log_dir):
     """
-    Verify that logging doesn't block the main execution flow 
+    Verify that logging doesn't block the main execution flow
     even with multiple threads.
     """
     config = LoggerConfig(
@@ -100,7 +100,7 @@ def test_logger_non_blocking(temp_log_dir):
         log_file="stress_test"
     )
     logger = Logger(config)
-    
+
     def log_task(n):
         for i in range(n):
             logger.info(f"Thread {threading.current_thread().name} log {i}")
@@ -240,17 +240,17 @@ def test_logger_pii_redaction_circular_reference():
         args=(),
         exc_info=None,
     )
-    
+
     # Create the cyclic/circular object
     a_dict = {}
     a_dict["self"] = a_dict
     a_dict["secret"] = "should_redact"
-    
+
     record.payload = a_dict
 
     pii_filter = PIISecretFilter()
     assert pii_filter.filter(record) is True
-    
+
     # Verify cyclic reduction succeeded without RecursionError
     assert "self" in record.payload
     assert record.payload["secret"] == "[REDACTED]"
@@ -263,11 +263,11 @@ def test_logger_toctou_symlink_attack_rejected(temp_log_dir):
     symlink_path = log_dir / "toctou_test.log"
     fake_target = log_dir / "target.log"
     fake_target.touch()
-    
+
     # Create the malicious symlink
     if os.name == "posix":
         os.symlink(fake_target, symlink_path)
-    
+
         config = LoggerConfig(
             log_dir=log_dir,
             logger_name="toctou_test",

@@ -1,7 +1,7 @@
 """
 Core Pydantic models for configuration and data validation.
 
-This module defines standardized models for logger settings, resource 
+This module defines standardized models for logger settings, resource
 configurations, and other core components of the Boti toolkit.
 """
 
