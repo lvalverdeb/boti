@@ -67,8 +67,7 @@ class Agent(LifecycleCore):
         if self.config.logger is None:
             self.logger = Logger.default_logger(logger_name=self.__class__.__name__)
             level = (
-                Logger.DEBUG if self.debug
-                else (Logger.INFO if self.verbose else Logger.WARNING)
+                Logger.DEBUG if self.debug else (Logger.INFO if self.verbose else Logger.WARNING)
             )
             self.logger.set_level(level)
         else:

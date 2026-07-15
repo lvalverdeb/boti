@@ -79,7 +79,17 @@ def test_filesystem_config_file_storage_path_unchanged():
 def test_filesystem_config_all_allowed_backends():
     """Spot-check that all well-known allowed backends pass validation."""
     allowed_backends = (
-        "file", "local", "memory", "s3", "gcs", "az", "abfs", "ftp", "sftp", "http", "https",
+        "file",
+        "local",
+        "memory",
+        "s3",
+        "gcs",
+        "az",
+        "abfs",
+        "ftp",
+        "sftp",
+        "http",
+        "https",
     )
     for fs_type in allowed_backends:
         config = FilesystemConfig(fs_type=fs_type, fs_path="some/path")
@@ -601,12 +611,12 @@ def test_pyarrow_s3_kwargs_compat_uses_aliases_from_fs_options():
 @pytest.mark.parametrize(
     "endpoint",
     [
-        "http://169.254.169.254/latest/meta-data",   # AWS IMDS
-        "http://169.254.169.254",                    # bare IMDS
-        "http://127.0.0.1:9000",                     # loopback
-        "http://192.168.1.100:9000",                 # RFC-1918
-        "http://10.0.0.5",                           # RFC-1918
-        "http://172.16.0.1",                         # RFC-1918
+        "http://169.254.169.254/latest/meta-data",  # AWS IMDS
+        "http://169.254.169.254",  # bare IMDS
+        "http://127.0.0.1:9000",  # loopback
+        "http://192.168.1.100:9000",  # RFC-1918
+        "http://10.0.0.5",  # RFC-1918
+        "http://172.16.0.1",  # RFC-1918
     ],
 )
 def test_filesystem_config_rejects_private_ip_endpoints(endpoint):
@@ -629,6 +639,7 @@ def test_filesystem_config_accepts_public_https_endpoint():
 
 def test_filesystem_config_accepts_allowlisted_private_endpoint():
     import boti.core.filesystem as fs_module
+
     original = fs_module.ENDPOINT_ALLOWLIST
     try:
         fs_module.ENDPOINT_ALLOWLIST = frozenset({"minio.internal:9000"})

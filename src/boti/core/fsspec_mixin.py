@@ -75,8 +75,7 @@ class FsspecMixin:
             fs_new = factory()
             if not isinstance(fs_new, fsspec.AbstractFileSystem):
                 raise TypeError(
-                    f"fs_factory() must return fsspec.AbstractFileSystem, "
-                    f"got {type(fs_new)!r}"
+                    f"fs_factory() must return fsspec.AbstractFileSystem, got {type(fs_new)!r}"
                 )
             with self._state_lock:  # type: ignore[attr-defined]
                 # The resource may have been closed while the factory ran;
@@ -93,7 +92,6 @@ class FsspecMixin:
         fs = self._ensure_fs()
         if fs is None:
             raise RuntimeError(
-                f"{self.__class__.__name__}: "
-                "filesystem is required but not configured"
+                f"{self.__class__.__name__}: filesystem is required but not configured"
             )
         return fs

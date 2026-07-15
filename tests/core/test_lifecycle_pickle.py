@@ -40,8 +40,12 @@ def test_getstate_strips_lifecyclecore_locks_and_events():
     try:
         state = thing.__getstate__()
         for key in (
-            "_state_lock", "_aclose_lock", "_closed_event",
-            "_closing_thread", "_closing_task", "_finalizer",
+            "_state_lock",
+            "_aclose_lock",
+            "_closed_event",
+            "_closing_thread",
+            "_closing_task",
+            "_finalizer",
         ):
             assert key not in state
         assert state["name"] == "widget"

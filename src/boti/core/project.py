@@ -63,8 +63,7 @@ class ProjectService:
         if start_path is not None:
             candidate = ProjectService._normalize_search_path(start_path)
             return (
-                ProjectService._search_ancestors(candidate, markers=resolved_markers)
-                or candidate
+                ProjectService._search_ancestors(candidate, markers=resolved_markers) or candidate
             )
 
         candidates = list(ProjectService._candidate_search_paths())

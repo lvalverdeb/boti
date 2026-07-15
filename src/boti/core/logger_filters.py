@@ -33,27 +33,49 @@ class PIISecretFilter(logging.Filter):
       by key name (sensitive keys) or by value (sensitive assignment patterns).
     """
 
-    _SENSITIVE_KEYS: frozenset[str] = frozenset({
-        "password",
-        "passwd",
-        "secret",
-        "token",
-        "api_key",
-        "access_key",
-        "auth_token",
-        "authorization",
-        "bearer",
-    })
+    _SENSITIVE_KEYS: frozenset[str] = frozenset(
+        {
+            "password",
+            "passwd",
+            "secret",
+            "token",
+            "api_key",
+            "access_key",
+            "auth_token",
+            "authorization",
+            "bearer",
+        }
+    )
     _REDACTED_MESSAGE = "[REDACTED SENSITIVE DATA]"
 
     # Attributes that are part of LogRecord's standard schema — never redacted
     # as "extra" fields even if their names happen to match a sensitive keyword.
-    _LOGRECORD_STDLIB_ATTRS: frozenset[str] = frozenset({
-        "name", "msg", "args", "levelname", "levelno", "pathname", "filename",
-        "module", "exc_info", "exc_text", "stack_info", "lineno", "funcName",
-        "created", "msecs", "relativeCreated", "thread", "threadName",
-        "processName", "process", "message", "taskName",
-    })
+    _LOGRECORD_STDLIB_ATTRS: frozenset[str] = frozenset(
+        {
+            "name",
+            "msg",
+            "args",
+            "levelname",
+            "levelno",
+            "pathname",
+            "filename",
+            "module",
+            "exc_info",
+            "exc_text",
+            "stack_info",
+            "lineno",
+            "funcName",
+            "created",
+            "msecs",
+            "relativeCreated",
+            "thread",
+            "threadName",
+            "processName",
+            "process",
+            "message",
+            "taskName",
+        }
+    )
 
     def filter(self, record: logging.LogRecord) -> bool:
         if isinstance(record.msg, str) and _SENSITIVE_ASSIGNMENT_RE.search(record.msg):
@@ -80,8 +102,7 @@ class PIISecretFilter(logging.Filter):
             return tuple(self._redact_value(arg) for arg in args)
         if isinstance(args, dict):
             return {
-                k: "[REDACTED]" if str(k).lower() in self._SENSITIVE_KEYS
-                else self._redact_value(v)
+                k: "[REDACTED]" if str(k).lower() in self._SENSITIVE_KEYS else self._redact_value(v)
                 for k, v in args.items()
             }
         return args

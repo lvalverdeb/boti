@@ -1,6 +1,7 @@
 """
 Shared pytest fixtures for boti.core tests.
 """
+
 import datetime
 import shutil
 import sqlite3

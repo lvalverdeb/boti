@@ -1,6 +1,7 @@
 """
 Tests for the non-blocking Logger and PII redaction.
 """
+
 import logging
 import os
 import threading
@@ -17,11 +18,7 @@ from boti.core.models import LoggerConfig
 
 def test_logger_pii_redaction(temp_log_dir):
     """Verify that sensitive information is redacted from logs."""
-    config = LoggerConfig(
-        log_dir=temp_log_dir,
-        logger_name="pii_test",
-        log_file="pii_test"
-    )
+    config = LoggerConfig(log_dir=temp_log_dir, logger_name="pii_test", log_file="pii_test")
     logger = Logger(config)
 
     # Log something sensitive
@@ -47,9 +44,7 @@ def test_logger_pii_redaction_clears_sensitive_args(temp_log_dir):
     itself* contains a sensitive keyword the entire message is replaced.
     """
     config = LoggerConfig(
-        log_dir=temp_log_dir,
-        logger_name="pii_args_test",
-        log_file="pii_args_test"
+        log_dir=temp_log_dir, logger_name="pii_args_test", log_file="pii_args_test"
     )
     logger = Logger(config)
 
@@ -94,11 +89,7 @@ def test_logger_non_blocking(temp_log_dir):
     Verify that logging doesn't block the main execution flow
     even with multiple threads.
     """
-    config = LoggerConfig(
-        log_dir=temp_log_dir,
-        logger_name="stress_test",
-        log_file="stress_test"
-    )
+    config = LoggerConfig(log_dir=temp_log_dir, logger_name="stress_test", log_file="stress_test")
     logger = Logger(config)
 
     def log_task(n):
@@ -195,7 +186,7 @@ def test_logger_uses_restrictive_permissions_on_posix(temp_log_dir):
     config = LoggerConfig(
         log_dir=temp_log_dir / "nested_logs",
         logger_name="permissions_test",
-        log_file="permissions_test"
+        log_file="permissions_test",
     )
     logger = Logger(config)
     logger.info("permissions check")
@@ -229,6 +220,7 @@ def test_logger_rejects_unsafe_logger_name(temp_log_dir):
             log_file="safe_name",
         )
 
+
 def test_logger_pii_redaction_circular_reference():
     """Verify that circular references in extra fields do not cause infinite recursion DoS."""
     record = logging.LogRecord(
@@ -254,6 +246,7 @@ def test_logger_pii_redaction_circular_reference():
     # Verify cyclic reduction succeeded without RecursionError
     assert "self" in record.payload
     assert record.payload["secret"] == "[REDACTED]"
+
 
 def test_logger_toctou_symlink_attack_rejected(temp_log_dir):
     """Verify that the logger refuses to write to a planted symlink log file."""

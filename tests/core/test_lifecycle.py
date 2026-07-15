@@ -1,6 +1,7 @@
 """
 Tests for ManagedResource lifecycle (sync and async).
 """
+
 import asyncio
 import gc
 import pickle
@@ -57,10 +58,12 @@ async def test_managed_resource_async_context():
 @pytest.mark.asyncio
 async def test_managed_resource_aclose_fallback():
     """Verify that aclose falls back to sync cleanup if async is not overridden."""
+
     class SyncOnlyResource(ManagedResource):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
             self.cleaned_up = False
+
         def _cleanup(self):
             self.cleaned_up = True
 
@@ -75,7 +78,7 @@ def test_managed_resource_close_idempotency():
     res = SimpleResource()
     res.close()
     assert res.closed
-    res.close() # Should not raise
+    res.close()  # Should not raise
     assert res.closed
 
 
@@ -248,7 +251,9 @@ def test_trusted_unpickle_active_emits_startup_warning(monkeypatch):
         res = SimpleResource()
         try:
             security_warnings = [
-                w for w in caught if issubclass(w.category, RuntimeWarning)
+                w
+                for w in caught
+                if issubclass(w.category, RuntimeWarning)
                 and "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE" in str(w.message)
             ]
             assert security_warnings, (
@@ -271,7 +276,9 @@ def test_trusted_unpickle_warning_emitted_once_per_process(monkeypatch):
         resources = [SimpleResource() for _ in range(5)]
         try:
             security_warnings = [
-                w for w in caught if issubclass(w.category, RuntimeWarning)
+                w
+                for w in caught
+                if issubclass(w.category, RuntimeWarning)
                 and "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE" in str(w.message)
             ]
             assert len(security_warnings) == 1, (
@@ -285,6 +292,7 @@ def test_trusted_unpickle_warning_emitted_once_per_process(monkeypatch):
 # ---------------------------------------------------------------------------
 # Regression tests for mass-subclassing scenarios
 # ---------------------------------------------------------------------------
+
 
 def test_fs_cleanup_on_close():
     """Verify that _cleanup() releases the owned filesystem on close()."""
@@ -393,6 +401,7 @@ def test_gc_finalizer_fires_when_not_closed():
     assert finalizer.alive
 
     import weakref
+
     ref = weakref.ref(res)
     del res
     gc.collect()
@@ -425,9 +434,7 @@ def test_cross_thread_trusted_unpickle_scope_isolation():
     t2.join()
 
     assert results.get("setter_active") is True
-    assert results.get("checker_active") is False, (
-        "trusted_unpickle_scope leaked across threads"
-    )
+    assert results.get("checker_active") is False, "trusted_unpickle_scope leaked across threads"
 
     # Also verify the scope works for actual unpickling within one thread
     with ManagedResource.trusted_unpickle_scope():
@@ -439,6 +446,7 @@ def test_cross_thread_trusted_unpickle_scope_isolation():
 # ---------------------------------------------------------------------------
 # Close-barrier and lock-scope regression tests
 # ---------------------------------------------------------------------------
+
 
 def test_concurrent_close_waits_for_cleanup():
     """close() from a second thread must not return until the first closer's
@@ -483,6 +491,7 @@ def test_concurrent_close_waits_for_cleanup():
 
 def test_reentrant_close_from_cleanup_does_not_deadlock():
     """A _cleanup() hook that calls close() again must return, not deadlock."""
+
     class ReentrantResource(ManagedResource):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
@@ -505,6 +514,7 @@ def test_reentrant_close_from_cleanup_does_not_deadlock():
 async def test_reentrant_aclose_from_acleanup_does_not_deadlock():
     """An _acleanup() hook that awaits aclose() again must return, not
     deadlock on the non-reentrant _aclose_lock."""
+
     class ReentrantAsync(ManagedResource):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
@@ -555,6 +565,7 @@ async def test_concurrent_aclose_tasks_observe_barrier():
 async def test_reentrant_close_from_acleanup_fallback_does_not_deadlock():
     """aclose()'s to_thread fallback runs _cleanup on a worker thread; a
     reentrant close() from inside the hook must still be recognised."""
+
     class ReentrantSyncOnly(ManagedResource):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
@@ -638,6 +649,7 @@ async def test_sync_close_reentrant_from_within_acleanup_task_still_returns():
     """A sync close() called from *inside* the async closer's own _acleanup()
     (same task, same thread) is genuine reentrancy and must return quietly,
     not raise — task identity is what distinguishes it from a sibling task."""
+
     class ReentrantMixed(ManagedResource):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)
@@ -717,6 +729,3 @@ def test_close_during_fs_factory_discards_filesystem():
 
     assert isinstance(outcome["result"], RuntimeError)
     assert res.fs is None
-
-
-

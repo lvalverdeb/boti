@@ -22,8 +22,7 @@ def test_core_modules_do_not_depend_on_data():
     for path in sorted(SRC_ROOT.glob("*.py")):
         imported_modules = _imported_modules(path)
         if any(
-            module == "boti_data" or module.startswith("boti_data.")
-            for module in imported_modules
+            module == "boti_data" or module.startswith("boti_data.") for module in imported_modules
         ):
             offenders.append(path.name)
 

@@ -1,6 +1,7 @@
 """
 Tests for the Agent base class.
 """
+
 import gc
 import logging
 import weakref
@@ -50,6 +51,7 @@ async def test_agent_async_context():
 @pytest.mark.asyncio
 async def test_agent_aclose_falls_back_to_sync_cleanup():
     """Verify aclose() runs _cleanup() when _acleanup() is not overridden."""
+
     class SyncOnlyAgent(Agent):
         def __init__(self, **kwargs):
             super().__init__(**kwargs)

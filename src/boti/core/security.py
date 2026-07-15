@@ -66,7 +66,7 @@ def is_valid_identifier(name: str) -> bool:
     Returns:
         bool: True if it is a valid Python identifier.
     """
-    return bool(re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name))
+    return bool(re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", name))
 
 
 def is_valid_dotted_identifier(name: str) -> bool:
@@ -133,16 +133,10 @@ def validate_environment_bindings(bindings: Mapping[str, str]) -> dict[str, str]
                 "Names must match [A-Za-z_][A-Za-z0-9_]*."
             )
         if "\x00" in value:
-            raise ValueError(
-                f"Environment variable '{key}' must not contain NUL bytes."
-            )
+            raise ValueError(f"Environment variable '{key}' must not contain NUL bytes.")
         if "\n" in value or "\r" in value:
-            raise ValueError(
-                f"Environment variable '{key}' must not contain newline characters."
-            )
+            raise ValueError(f"Environment variable '{key}' must not contain newline characters.")
         if "\t" in value:
-            raise ValueError(
-                f"Environment variable '{key}' must not contain tab characters."
-            )
+            raise ValueError(f"Environment variable '{key}' must not contain tab characters.")
         validated[key] = value
     return validated

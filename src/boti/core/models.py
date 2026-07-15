@@ -21,6 +21,7 @@ class LoggerConfig(BaseModel):
     """
     Configuration for the Boti logger.
     """
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     log_dir: str | Path = Field(default="logs", description="Directory for log files.")
@@ -79,6 +80,7 @@ class ResourceConfig(BaseModel):
     """
     Base configuration for ManagedResource and SecureResource.
     """
+
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     verbose: bool = Field(default=False, description="Enable verbose output.")
@@ -87,8 +89,7 @@ class ResourceConfig(BaseModel):
     skip_logger: bool = Field(
         default=False,
         description=(
-            "Skip automatic logger creation. "
-            "The resource will not have a configured logger."
+            "Skip automatic logger creation. The resource will not have a configured logger."
         ),
     )
     allow_pickle: bool = Field(

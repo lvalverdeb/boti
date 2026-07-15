@@ -70,10 +70,8 @@ class ManagedResource(PickleSecurityMixin, FsspecMixin, LifecycleCore):
                 base_dir=log_base_dir,
             )
             level = (
-                Logger.DEBUG if self.debug
-                else (Logger.INFO if self.verbose else Logger.WARNING)
+                Logger.DEBUG if self.debug else (Logger.INFO if self.verbose else Logger.WARNING)
             )
             self.logger.set_level(level)
         else:
             self.logger = self.config.logger
-

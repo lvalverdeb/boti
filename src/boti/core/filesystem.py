@@ -31,31 +31,33 @@ __all__ = [
 # Explicit allowlist of fsspec backend identifiers that are safe to instantiate
 # from user-supplied or environment-backed configuration.  Arbitrary backends
 # (e.g. custom handlers, ssh, smb) must be constructed directly via fsspec.
-_ALLOWED_FS_TYPES: frozenset[str] = frozenset({
-    "file",
-    "local",
-    "memory",
-    "s3",
-    "s3a",
-    "gcs",
-    "gs",
-    "az",
-    "abfs",
-    "adl",
-    "ftp",
-    "sftp",
-    "http",
-    "https",
-    "zip",
-    "tar",
-    "blockcache",
-    "filecache",
-    "simplecache",
-    "github",
-    "git",
-    "arrow_hdfs",
-    "hdfs",
-})
+_ALLOWED_FS_TYPES: frozenset[str] = frozenset(
+    {
+        "file",
+        "local",
+        "memory",
+        "s3",
+        "s3a",
+        "gcs",
+        "gs",
+        "az",
+        "abfs",
+        "adl",
+        "ftp",
+        "sftp",
+        "http",
+        "https",
+        "zip",
+        "tar",
+        "blockcache",
+        "filecache",
+        "simplecache",
+        "github",
+        "git",
+        "arrow_hdfs",
+        "hdfs",
+    }
+)
 
 # RFC-1918 and link-local ranges that must not be reachable via fs_endpoint
 # unless explicitly whitelisted by the operator.
@@ -94,16 +96,18 @@ def add_endpoint_to_allowlist(*hosts: str) -> None:
 
 # Reserved hostnames that must be blocked regardless of IP resolution.
 # Covers loopback aliases and common cloud-metadata service names.
-_RESERVED_HOSTNAMES: frozenset[str] = frozenset({
-    "localhost",
-    "ip6-localhost",
-    "ip6-loopback",
-    "broadcasthost",
-    # Cloud metadata services (reachable by name in some environments)
-    "metadata",
-    "metadata.google.internal",
-    "169.254.169.254",  # literal string form as well
-})
+_RESERVED_HOSTNAMES: frozenset[str] = frozenset(
+    {
+        "localhost",
+        "ip6-localhost",
+        "ip6-loopback",
+        "broadcasthost",
+        # Cloud metadata services (reachable by name in some environments)
+        "metadata",
+        "metadata.google.internal",
+        "169.254.169.254",  # literal string form as well
+    }
+)
 
 
 def _is_private_ip(hostname: str) -> bool:
@@ -141,15 +145,13 @@ class FilesystemConfig(BaseModel):
     fs_connect_timeout: float | None = Field(
         default=10.0,
         description=(
-            "TCP connect timeout in seconds for remote backends. "
-            "None disables the timeout."
+            "TCP connect timeout in seconds for remote backends. None disables the timeout."
         ),
     )
     fs_read_timeout: float | None = Field(
         default=30.0,
         description=(
-            "Socket read timeout in seconds for remote backends. "
-            "None disables the timeout."
+            "Socket read timeout in seconds for remote backends. None disables the timeout."
         ),
     )
     fs_options: dict[str, Any] = Field(default_factory=dict)
@@ -162,11 +164,11 @@ class FilesystemConfig(BaseModel):
 
     @classmethod
     def from_env_prefix(
-            cls,
-            prefix: str,
-            *,
-            env_file: str | Path | None = None,
-            **overrides: Any,
+        cls,
+        prefix: str,
+        *,
+        env_file: str | Path | None = None,
+        **overrides: Any,
     ) -> FilesystemConfig:
         settings = load_prefixed_model(FilesystemSettings, prefix, env_file=env_file)
         return cls.from_settings(settings, **overrides)
@@ -435,11 +437,11 @@ def _pyarrow_s3_kwargs_with_compat(config: FilesystemConfig) -> dict[str, Any]:
 
 
 def _with_retry[T](
-        fn: Callable[[], T],
-        *,
-        max_attempts: int = 3,
-        base_delay: float = 0.5,
-        label: str = "operation",
+    fn: Callable[[], T],
+    *,
+    max_attempts: int = 3,
+    base_delay: float = 0.5,
+    label: str = "operation",
 ) -> T:
     """Call *fn* with exponential back-off on transient errors.
 
@@ -490,11 +492,11 @@ class FilesystemAdapter:
     """
 
     def __init__(
-            self,
-            config: FilesystemConfig,
-            *,
-            max_attempts: int = 3,
-            retry_base_delay: float = 0.5,
+        self,
+        config: FilesystemConfig,
+        *,
+        max_attempts: int = 3,
+        retry_base_delay: float = 0.5,
     ) -> None:
         self.config = config
         self._max_attempts = max_attempts

@@ -63,10 +63,7 @@ class LifecycleCore:
             self._finalizer = None
             return
         self._finalizer = weakref.finalize(
-            self,
-            LifecycleCore._finalize_callback,
-            self.logger,
-            self.__class__.__name__
+            self, LifecycleCore._finalize_callback, self.logger, self.__class__.__name__
         )
 
     @staticmethod
@@ -83,7 +80,7 @@ class LifecycleCore:
                 warnings.warn(
                     f"{class_name} was garbage collected without being closed.",
                     ResourceWarning,
-                    stacklevel=2
+                    stacklevel=2,
                 )
         except Exception:
             _module_log.debug("Exception in _finalize_callback (harmless during shutdown)")
