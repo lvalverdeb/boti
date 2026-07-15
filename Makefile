@@ -4,7 +4,7 @@
 # from the Makefile's own location instead (always one level up).
 REPO_ROOT := $(shell realpath $(dir $(realpath $(lastword $(MAKEFILE_LIST))))..)
 
-.PHONY: help clean build upload upload-test install-dev test lint format typecheck coverage check
+.PHONY: help clean build upload upload-test install-dev test lint format format-check typecheck coverage verify check
 
 LOAD_ENV = if [ -f .env ]; then set -a; . .env; set +a; fi
 REQUIRE_PUBLISH_TOKEN = test -n "$$UV_PUBLISH_TOKEN" || { echo "UV_PUBLISH_TOKEN is required (set it in .env or the environment)."; exit 1; }
@@ -19,9 +19,11 @@ help:
 	@echo "  test         - Run test suite"
 	@echo "  lint         - Run ruff linter"
 	@echo "  format       - Run ruff formatter"
+	@echo "  format-check - Check formatting without applying (matches CI)"
 	@echo "  typecheck    - Run mypy type checker"
 	@echo "  coverage     - Run tests with coverage report"
-	@echo "  check        - Lint + tests + dry-run publish"
+	@echo "  verify       - Run the exact checks CI runs: lint + format-check + typecheck + coverage-gated tests"
+	@echo "  check        - verify + dry-run publish"
 
 clean:
 	rm -rf $(REPO_ROOT)/dist/ $(REPO_ROOT)/build/ src/*.egg-info htmlcov/ .coverage
@@ -31,10 +33,10 @@ clean:
 build: clean
 	uv build
 
-upload: build
+upload: verify build
 	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --token "$$UV_PUBLISH_TOKEN" $$(ls $(REPO_ROOT)/dist/boti-*)
 
-upload-test: build
+upload-test: verify build
 	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --publish-url https://test.pypi.org/legacy/ --token "$$UV_PUBLISH_TOKEN" $$(ls $(REPO_ROOT)/dist/boti-*)
 
 install-dev:
@@ -49,11 +51,19 @@ lint:
 format:
 	uv run ruff format src/ tests/
 
+format-check:
+	uv run ruff format --check src/ tests/
+
 typecheck:
 	uv run mypy src/
 
 coverage:
 	uv run pytest --cov=boti --cov-report=term-missing --cov-report=html
 
-check: lint test build
+# Mirrors .github/workflows/ci.yml exactly (test + lint + typecheck jobs),
+# so a local publish can't happen without the same checks CI enforces.
+verify: lint format-check typecheck
+	uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
+
+check: verify build
 	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --dry-run --token "$$UV_PUBLISH_TOKEN" $$(ls $(REPO_ROOT)/dist/boti-*)
