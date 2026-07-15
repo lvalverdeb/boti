@@ -13,7 +13,7 @@ At its core, `boti` is about giving transformation code a consistent runtime mod
 - how projects discover their root and runtime configuration
 - how logs are emitted in a predictable way
 
-## What problem `boti` solves
+## What problems does `boti` solve?
 
 Python is the dominant language for data engineering, automation, and ML — but the path from exploratory notebook to production pipeline is littered with well-documented failure modes:
 
