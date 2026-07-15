@@ -43,10 +43,9 @@ def load_dotenv_values(env_file: Path) -> dict[str, str]:
         case_sensitive=True,
     )
     data = source()
-    return validate_environment_bindings({
-        str(key): "" if value is None else str(value)
-        for key, value in data.items()
-    })
+    return validate_environment_bindings(
+        {str(key): "" if value is None else str(value) for key, value in data.items()}
+    )
 
 
 def _validate_env_prefix(prefix: str) -> str:
@@ -60,10 +59,10 @@ def _validate_env_prefix(prefix: str) -> str:
 
 
 def load_prefixed_model[TModel: BaseModel](
-        model_cls: type[TModel],
-        prefix: str,
+    model_cls: type[TModel],
+    prefix: str,
     *,
-        env_file: Path | str | None = None,
+    env_file: Path | str | None = None,
 ) -> TModel:
     """Load a typed model from environment variables using an explicit prefix."""
     normalized_prefix = _validate_env_prefix(prefix)
@@ -79,10 +78,10 @@ def load_prefixed_model[TModel: BaseModel](
     for field_name, field in model_cls.model_fields.items():
         env_key = f"{normalized_prefix}{field_name.upper()}"
         raw_value = merged_bindings.get(env_key)
-        if raw_value in (None, ""):
+        if raw_value is None or raw_value == "":
             continue
 
-        adapter = TypeAdapter(field.annotation)
+        adapter: TypeAdapter[Any] = TypeAdapter(field.annotation)
         try:
             payload[field_name] = adapter.validate_python(raw_value)
         except ValidationError:

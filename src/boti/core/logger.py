@@ -64,7 +64,7 @@ class Logger:
             config: LoggerConfig model containing initialization parameters.
         """
         self.config = config
-        self.log_dir = config.log_dir
+        self.log_dir: Path = Path(config.log_dir)
         self.logger_name = config.logger_name
         self.log_file = config.log_file or config.logger_name
         self.log_level = config.log_level
@@ -112,7 +112,7 @@ class Logger:
                     log_dir=resolved_log_dir,
                     logger_name=logger_name,
                     log_file=log_file,
-                    log_level=log_level
+                    log_level=log_level,
                 )
                 logger = cls(config)
                 cls._default_logger_cache[cache_key] = logger
@@ -212,14 +212,18 @@ class Logger:
 
             # Attach QueueHandler to this logger
             if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
-                qh = QueueHandler(LoggerRuntime._log_queue)
+                qh = QueueHandler(LoggerRuntime._ensure_queue())
                 qh.addFilter(PIISecretFilter())
                 self._core.addHandler(qh)
 
             # Add destinations to the global listener
-            LoggerRuntime.add_destination(file_key, SafeRotatingFileHandler(
-                log_file_path, maxBytes=5 * 1024 * 1024, backupCount=5, delay=True
-            ), fmt)
+            LoggerRuntime.add_destination(
+                file_key,
+                SafeRotatingFileHandler(
+                    log_file_path, maxBytes=5 * 1024 * 1024, backupCount=5, delay=True
+                ),
+                fmt,
+            )
 
             LoggerRuntime.add_destination(console_key, logging.StreamHandler(sys.stdout), fmt)
 
@@ -229,7 +233,7 @@ class Logger:
         with LoggerRuntime._lock:
             LoggerRuntime.ensure_listener()
             if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
-                qh = QueueHandler(LoggerRuntime._log_queue)
+                qh = QueueHandler(LoggerRuntime._ensure_queue())
                 qh.addFilter(PIISecretFilter())
                 self._core.addHandler(qh)
             console_key = (self.logger_name, "__console__")
