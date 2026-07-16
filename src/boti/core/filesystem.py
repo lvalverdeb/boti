@@ -94,6 +94,21 @@ def add_endpoint_to_allowlist(*hosts: str) -> None:
         ENDPOINT_ALLOWLIST.add(host.strip())
 
 
+def _allowlist_endpoint_from_url(endpoint: str) -> None:
+    """Allowlist the host[:port] parsed from *endpoint*.
+
+    Used by ``FilesystemConfig.from_env_prefix(..., trust_env_endpoint=True)``
+    so a deployment-trusted endpoint sourced from environment config doesn't
+    require a separate manual ``add_endpoint_to_allowlist()`` call.
+    """
+    parsed = urlparse(endpoint.strip())
+    hostname = parsed.hostname or ""
+    if not hostname:
+        return
+    allowlist_key = f"{hostname}:{parsed.port}" if parsed.port else hostname
+    add_endpoint_to_allowlist(allowlist_key, hostname)
+
+
 # Reserved hostnames that must be blocked regardless of IP resolution.
 # Covers loopback aliases and common cloud-metadata service names.
 _RESERVED_HOSTNAMES: frozenset[str] = frozenset(
@@ -168,9 +183,23 @@ class FilesystemConfig(BaseModel):
         prefix: str,
         *,
         env_file: str | Path | None = None,
+        trust_env_endpoint: bool = False,
         **overrides: Any,
     ) -> FilesystemConfig:
+        """Build a :class:`FilesystemConfig` from ``{prefix}*`` environment variables.
+
+        Args:
+            trust_env_endpoint: When ``True``, allowlist the endpoint loaded from
+                ``{prefix}FS_ENDPOINT`` before validation, so a private/internal
+                address configured via trusted deployment config (rather than
+                user input) doesn't trip the SSRF guard in
+                :meth:`validate_fs_endpoint`. Defaults to ``False`` — callers must
+                still opt in explicitly, or call
+                :func:`add_endpoint_to_allowlist` themselves beforehand.
+        """
         settings = load_prefixed_model(FilesystemSettings, prefix, env_file=env_file)
+        if trust_env_endpoint and settings.fs_endpoint:
+            _allowlist_endpoint_from_url(settings.fs_endpoint)
         return cls.from_settings(settings, **overrides)
 
     @field_validator("fs_endpoint")

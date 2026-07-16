@@ -654,3 +654,50 @@ def test_filesystem_config_accepts_allowlisted_private_endpoint():
         assert "minio.internal" in config.fs_endpoint
     finally:
         fs_module.ENDPOINT_ALLOWLIST = original
+
+
+def test_filesystem_config_from_env_prefix_trust_env_endpoint_allowlists_private_ip(tmp_path):
+    """trust_env_endpoint=True allowlists the env-sourced endpoint before
+    validation, so a trusted internal deployment endpoint (private IP) doesn't
+    require a separate manual add_endpoint_to_allowlist() call."""
+    import boti.core.filesystem as fs_module
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "MYFS_TRUST_FS_TYPE=s3\n"
+        "MYFS_TRUST_FS_PATH=my-bucket\n"
+        "MYFS_TRUST_FS_ENDPOINT=http://10.211.55.28:9000\n",
+        encoding="utf-8",
+    )
+
+    original = fs_module.ENDPOINT_ALLOWLIST
+    try:
+        fs_module.ENDPOINT_ALLOWLIST = set()
+        config = FilesystemConfig.from_env_prefix(
+            "MYFS_TRUST_", env_file=env_file, trust_env_endpoint=True
+        )
+        assert config.fs_endpoint == "http://10.211.55.28:9000"
+    finally:
+        fs_module.ENDPOINT_ALLOWLIST = original
+
+
+def test_filesystem_config_from_env_prefix_defaults_to_not_trusting_endpoint(tmp_path):
+    """Without trust_env_endpoint=True, a private-IP env endpoint is still
+    rejected -- the escape hatch requires explicit opt-in."""
+    import boti.core.filesystem as fs_module
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "MYFS_NOTRUST_FS_TYPE=s3\n"
+        "MYFS_NOTRUST_FS_PATH=my-bucket\n"
+        "MYFS_NOTRUST_FS_ENDPOINT=http://10.211.55.30:9000\n",
+        encoding="utf-8",
+    )
+
+    original = fs_module.ENDPOINT_ALLOWLIST
+    try:
+        fs_module.ENDPOINT_ALLOWLIST = set()
+        with pytest.raises(ValueError, match="private or reserved IP"):
+            FilesystemConfig.from_env_prefix("MYFS_NOTRUST_", env_file=env_file)
+    finally:
+        fs_module.ENDPOINT_ALLOWLIST = original
