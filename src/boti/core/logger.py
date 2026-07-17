@@ -30,8 +30,32 @@ from boti.core.project import ProjectService
 _LogExtra = dict[str, Any] | None
 
 
+class _ExtraFieldsFormatter(logging.Formatter):
+    """Appends a ``key=value`` tail for any bound/``extra=`` fields on the record.
+
+    Uses ``PIISecretFilter``'s own stdlib-attribute allowlist to identify what
+    counts as "extra", so the two stay in sync by construction.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Snapshot extras *before* delegating: the base Formatter mutates the
+        # record in place (adds ``message``, and ``asctime`` when the format
+        # string uses it), and neither is in PIISecretFilter's allowlist since
+        # that filter runs earlier, before formatting.
+        extras = {
+            k: v
+            for k, v in record.__dict__.items()
+            if k not in PIISecretFilter._LOGRECORD_STDLIB_ATTRS and not k.startswith("_")
+        }
+        base = super().format(record)
+        if not extras:
+            return base
+        tail = " ".join(f"{k}={v!r}" for k, v in extras.items())
+        return f"{base} | {tail}"
+
+
 def _default_formatter() -> logging.Formatter:
-    return logging.Formatter(
+    return _ExtraFieldsFormatter(
         "[%(asctime)s][%(levelname)s][%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )

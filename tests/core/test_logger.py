@@ -292,3 +292,51 @@ def test_safe_rotating_file_handler_rejects_symlink_swap(temp_log_dir):
             handler._open()
     finally:
         handler.close()
+
+
+def test_logger_renders_bound_fields_in_text_output(temp_log_dir):
+    """Verify .bind() fields appear as a key=value tail in the plain-text log line."""
+    config = LoggerConfig(log_dir=temp_log_dir, logger_name="bind_test", log_file="bind_test")
+    logger = Logger(config).bind(run_id="abc123")
+
+    logger.info("did thing")
+
+    time.sleep(0.5)
+
+    log_file = temp_log_dir / "bind_test.log"
+    content = log_file.read_text()
+
+    assert "did thing" in content
+    assert "run_id='abc123'" in content
+
+
+def test_logger_renders_extra_kwarg_fields_in_text_output(temp_log_dir):
+    """Verify a per-call extra= dict appears as a key=value tail in the plain-text log line."""
+    config = LoggerConfig(log_dir=temp_log_dir, logger_name="extra_test", log_file="extra_test")
+    logger = Logger(config)
+
+    logger.info("processed period", extra={"period": "2026-01"})
+
+    time.sleep(0.5)
+
+    log_file = temp_log_dir / "extra_test.log"
+    content = log_file.read_text()
+
+    assert "processed period" in content
+    assert "period='2026-01'" in content
+
+
+def test_logger_plain_message_has_no_trailing_tail(temp_log_dir):
+    """Verify a call with no bound/extra fields produces an unchanged line, no trailing '|'."""
+    config = LoggerConfig(log_dir=temp_log_dir, logger_name="plain_test", log_file="plain_test")
+    logger = Logger(config)
+
+    logger.info("nothing extra here")
+
+    time.sleep(0.5)
+
+    log_file = temp_log_dir / "plain_test.log"
+    content = log_file.read_text()
+
+    assert "nothing extra here" in content
+    assert "|" not in content
