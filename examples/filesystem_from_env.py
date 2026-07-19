@@ -14,7 +14,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from boti.core.filesystem import FilesystemConfig, FilesystemAdapter, create_filesystem
+from boti.core.filesystem import FilesystemAdapter, FilesystemConfig, create_filesystem
 from boti.core.settings import FilesystemSettings
 
 
@@ -49,10 +49,7 @@ def example_from_env_prefix() -> None:
     """Load configuration from prefixed environment variables."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         env_file = Path(tmp_dir) / ".env"
-        env_file.write_text(
-            "STORAGE_FS_TYPE=memory\n"
-            "STORAGE_FS_PATH=env-bucket/data\n"
-        )
+        env_file.write_text("STORAGE_FS_TYPE=memory\nSTORAGE_FS_PATH=env-bucket/data\n")
 
         config = FilesystemConfig.from_env_prefix("STORAGE_", env_file=env_file)
         print(f"  loaded fs_type: {config.fs_type!r}")

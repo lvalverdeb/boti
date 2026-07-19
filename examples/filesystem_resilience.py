@@ -51,6 +51,7 @@ def example_retry_recovers_from_transient_failure() -> None:
 
 def example_retry_exhausted() -> None:
     """When every attempt fails, the adapter re-raises the last transient error."""
+
     def always_fails(_config: FilesystemConfig) -> fsspec.AbstractFileSystem:
         raise TimeoutError("upstream never recovers")
 
@@ -100,9 +101,7 @@ def example_ssrf_endpoint_allowlisted() -> None:
     host = "minio.internal:9000"
     try:
         add_endpoint_to_allowlist(host)
-        config = FilesystemConfig(
-            fs_type="s3", fs_path="bucket", fs_endpoint=f"http://{host}"
-        )
+        config = FilesystemConfig(fs_type="s3", fs_path="bucket", fs_endpoint=f"http://{host}")
         print(f"  allowlisted endpoint accepted: {config.fs_endpoint}")
     finally:
         ENDPOINT_ALLOWLIST.discard(host)

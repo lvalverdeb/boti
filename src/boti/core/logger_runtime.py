@@ -12,24 +12,24 @@ from queue import Queue
 class LoggerRuntime:
     """Global queue/listener state shared by all Logger instances."""
 
-    _lock = threading.RLock()
+    lock = threading.RLock()
     _attached_keys: set[tuple[str, str]] = set()
     _log_queue: Queue[logging.LogRecord] | None = None
     _listener: QueueListener | None = None
     _atexit_registered: bool = False
 
     @classmethod
-    def _ensure_queue(cls) -> Queue[logging.LogRecord]:
+    def ensure_queue(cls) -> Queue[logging.LogRecord]:
         if cls._log_queue is None:
             cls._log_queue = Queue(-1)
         return cls._log_queue
 
     @classmethod
     def ensure_listener(cls) -> None:
-        with cls._lock:
+        with cls.lock:
             if cls._listener is not None:
                 return
-            queue = cls._ensure_queue()
+            queue = cls.ensure_queue()
             cls._listener = QueueListener(queue, respect_handler_level=True)
             cls._listener.start()
             if not cls._atexit_registered:
@@ -43,7 +43,7 @@ class LoggerRuntime:
         handler: logging.Handler,
         formatter: logging.Formatter,
     ) -> None:
-        with cls._lock:
+        with cls.lock:
             if key in cls._attached_keys:
                 return
 
@@ -61,7 +61,7 @@ class LoggerRuntime:
     @classmethod
     def stop_listener(cls) -> None:
         """Stop the background listener.  Safe to call multiple times."""
-        with cls._lock:
+        with cls.lock:
             if cls._listener is None:
                 return
             listener = cls._listener

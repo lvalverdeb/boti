@@ -13,7 +13,6 @@ Demonstrates:
 
 from __future__ import annotations
 
-import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -45,33 +44,44 @@ def example_basic_logging() -> None:
 def example_pii_redaction() -> None:
     """Sensitive fields in extra dicts are automatically redacted."""
     with TemporaryDirectory() as tmp_dir:
-        logger = Logger(LoggerConfig(
-            log_dir=Path(tmp_dir) / "logs",
-            logger_name="examples.pii",
-            debug=True,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=Path(tmp_dir) / "logs",
+                logger_name="examples.pii",
+                debug=True,
+            )
+        )
         logger.set_level(Logger.DEBUG)
 
         # These will have their sensitive keys redacted in the log output
-        logger.info("user login", extra={
-            "email": "alice@example.com",
-            "password": "hunter2",
-            "token": "eyJhbGciOiJIUzI1NiJ9.payload.sig",
-        })
-
-        logger.warning("API call", extra={
-            "api_key": "sk-live-XXXXXXXXXXXXXXXX",
-            "endpoint": "/v1/data",
-            "status": 401,
-        })
-
-        logger.info("nested payload", extra={
-            "user": {
-                "profile": {"access_key": "AKIAIOSFODNN7EXAMPLE"},
-                "preferences": {"theme": "dark"},
+        logger.info(
+            "user login",
+            extra={
+                "email": "alice@example.com",
+                "password": "hunter2",
+                "token": "eyJhbGciOiJIUzI1NiJ9.payload.sig",
             },
-            "session_id": "sess-abc",
-        })
+        )
+
+        logger.warning(
+            "API call",
+            extra={
+                "api_key": "sk-live-XXXXXXXXXXXXXXXX",
+                "endpoint": "/v1/data",
+                "status": 401,
+            },
+        )
+
+        logger.info(
+            "nested payload",
+            extra={
+                "user": {
+                    "profile": {"access_key": "AKIAIOSFODNN7EXAMPLE"},
+                    "preferences": {"theme": "dark"},
+                },
+                "session_id": "sess-abc",
+            },
+        )
 
         print(f"  PII-redacted messages written to {Path(tmp_dir) / 'logs'}")
     print()
@@ -109,11 +119,13 @@ def example_default_logger() -> None:
 def example_exception_logging() -> None:
     """Capture exceptions with exc_info for structured traceback logging."""
     with TemporaryDirectory() as tmp_dir:
-        logger = Logger(LoggerConfig(
-            log_dir=Path(tmp_dir) / "logs",
-            logger_name="examples.exc",
-            debug=True,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=Path(tmp_dir) / "logs",
+                logger_name="examples.exc",
+                debug=True,
+            )
+        )
         logger.set_level(Logger.DEBUG)
 
         try:
@@ -129,11 +141,13 @@ def example_log_level_runtime() -> None:
     """Change log level at runtime — messages below the threshold are suppressed."""
     with TemporaryDirectory() as tmp_dir:
         log_dir = Path(tmp_dir) / "logs"
-        logger = Logger(LoggerConfig(
-            log_dir=log_dir,
-            logger_name="examples.level",
-            log_level=Logger.WARNING,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=log_dir,
+                logger_name="examples.level",
+                log_level=Logger.WARNING,
+            )
+        )
         logger.set_level(Logger.WARNING)
 
         logger.info("this INFO is suppressed (WARNING threshold)")

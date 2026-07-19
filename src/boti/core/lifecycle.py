@@ -256,34 +256,11 @@ class LifecycleCore:
         barrier semantics of ``close()``.  ``_detach_finalizer`` is called
         inside the ``finally`` block so it runs even when cleanup raises.
         """
-        with self._state_lock:
-            if self._is_closed:
-                return
-            if (
-                self._closing
-                and self._closing_task is not None
-                and self._closing_task is asyncio.current_task()
-            ):
-                # Reentrant aclose() from within a cleanup hook: _aclose_lock
-                # is already held by this task and asyncio locks are not
-                # reentrant, so acquiring it again would deadlock.
-                return
+        if self._aclose_reentrant_or_closed():
+            return
 
         async with self._aclose_lock:
-            with self._state_lock:
-                if self._is_closed:
-                    return
-                if self._closing:
-                    if self._closing_thread == threading.get_ident():
-                        return
-                    waiter = self._closed_event
-                else:
-                    self._closing = True
-                    self._closing_thread = threading.get_ident()
-                    self._closing_task = asyncio.current_task()
-                    waiter = None
-            if waiter is not None:
-                await asyncio.to_thread(waiter.wait)
+            if not await self._aclose_claim_barrier():
                 return
 
             try:
@@ -305,6 +282,43 @@ class LifecycleCore:
                     self._release_transient_state()
                 self._closed_event.set()
                 self._detach_finalizer()
+
+    def _aclose_reentrant_or_closed(self) -> bool:
+        """True if ``aclose()`` should no-op immediately: already closed, or a
+        reentrant call from within this task's own ``_acleanup()`` (``_aclose_lock``
+        is already held by this task and asyncio locks are not reentrant, so
+        acquiring it again would deadlock).
+        """
+        with self._state_lock:
+            if self._is_closed:
+                return True
+            return (
+                self._closing
+                and self._closing_task is not None
+                and self._closing_task is asyncio.current_task()
+            )
+
+    async def _aclose_claim_barrier(self) -> bool:
+        """Under ``_aclose_lock``: claim the close barrier for this call, or wait
+        for an in-flight closer to finish.
+
+        Returns True if this call is now the closer and should run
+        ``_acleanup()``; False if the caller should return immediately
+        (already closed, a same-thread reentrant sync ``close()``, or an
+        in-flight closer's completion was awaited here).
+        """
+        with self._state_lock:
+            if self._is_closed or (self._closing and self._closing_thread == threading.get_ident()):
+                return False
+            if self._closing:
+                waiter = self._closed_event
+            else:
+                self._closing = True
+                self._closing_thread = threading.get_ident()
+                self._closing_task = asyncio.current_task()
+                return True
+        await asyncio.to_thread(waiter.wait)
+        return False
 
     def _cleanup_adopting_closer_thread(self) -> None:
         """Run ``_cleanup()`` in a ``to_thread`` worker, adopting closer identity.

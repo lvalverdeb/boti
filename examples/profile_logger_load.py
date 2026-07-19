@@ -25,8 +25,8 @@ from typing import Any
 from boti.core.logger import Logger
 from boti.core.models import LoggerConfig
 
-N_RECORDS = 5_000   # records per single-threaded scenario
-N_THREADS = 8       # concurrent writers for the contention scenario
+N_RECORDS = 5_000  # records per single-threaded scenario
+N_THREADS = 8  # concurrent writers for the contention scenario
 N_PER_THREAD = 500  # records emitted by each thread
 
 
@@ -66,6 +66,7 @@ _PII_EXTRA: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 # Scenario helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_logger(tmp: Path, name: str) -> Logger:
     config = LoggerConfig(
@@ -142,6 +143,7 @@ def bench_cache_hits(tmp: Path) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
@@ -156,11 +158,15 @@ def main() -> None:
         total_concurrent = N_THREADS * N_PER_THREAD
 
         scenarios: list[tuple[str, int, Any]] = [
-            ("clean records (baseline)",        N_RECORDS,          lambda: bench_clean_records(single_logger)),
-            ("PII-heavy records",               N_RECORDS,          lambda: bench_pii_records(single_logger)),
-            ("mixed records (1-in-4 PII)",      N_RECORDS,          lambda: bench_mixed_records(single_logger)),
-            (f"concurrent ({N_THREADS}×{N_PER_THREAD})", total_concurrent, lambda: bench_concurrent(concurrent_logger)),
-            ("default_logger() cache hits",     N_RECORDS,          lambda: bench_cache_hits(tmp)),
+            ("clean records (baseline)", N_RECORDS, lambda: bench_clean_records(single_logger)),
+            ("PII-heavy records", N_RECORDS, lambda: bench_pii_records(single_logger)),
+            ("mixed records (1-in-4 PII)", N_RECORDS, lambda: bench_mixed_records(single_logger)),
+            (
+                f"concurrent ({N_THREADS}×{N_PER_THREAD})",
+                total_concurrent,
+                lambda: bench_concurrent(concurrent_logger),
+            ),
+            ("default_logger() cache hits", N_RECORDS, lambda: bench_cache_hits(tmp)),
         ]
 
         print("Logger end-to-end load profile\n")
@@ -168,7 +174,9 @@ def main() -> None:
             t0 = time.perf_counter()
             fn()
             elapsed = time.perf_counter() - t0
-            print(f"  {label:<40s}  {n:>6,} records  {elapsed*1000:7.1f} ms  ({n/elapsed:,.0f} rec/s)")
+            print(
+                f"  {label:<40s}  {n:>6,} records  {elapsed * 1000:7.1f} ms  ({n / elapsed:,.0f} rec/s)"
+            )
 
         # Flush the queue before exit
         time.sleep(0.1)

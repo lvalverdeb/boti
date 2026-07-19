@@ -48,10 +48,8 @@ def _cmd_info(_args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_check(_args: argparse.Namespace) -> int:
+def _check_project_root() -> list[str]:
     errors: list[str] = []
-
-    # 1. Project root
     from boti.core.project import ProjectService
 
     try:
@@ -61,8 +59,11 @@ def _cmd_check(_args: argparse.Namespace) -> int:
         print(f"  [ok] Project root: {root}")
     except Exception as exc:
         errors.append(f"Project root detection failed: {exc}")
+    return errors
 
-    # 2. Core modules importable
+
+def _check_core_modules_importable() -> list[str]:
+    errors: list[str] = []
     core_modules = [
         "boti.core",
         "boti.core.models",
@@ -83,15 +84,21 @@ def _cmd_check(_args: argparse.Namespace) -> int:
             print(f"  [ok] Module: {mod_name}")
         except Exception as exc:
             errors.append(f"Module {mod_name} failed to import: {exc}")
+    return errors
 
-    # 3. Version readable
+
+def _check_version_readable() -> list[str]:
+    errors: list[str] = []
     try:
         version = _get_version()
         print(f"  [ok] Version: v{version}")
     except Exception as exc:
         errors.append(f"Version detection failed: {exc}")
+    return errors
 
-    # 4. Dependency check: critical runtime deps
+
+def _check_critical_dependencies() -> list[str]:
+    errors: list[str] = []
     critical_deps = ["pydantic", "fsspec", "pyarrow"]
     for dep in critical_deps:
         try:
@@ -102,6 +109,16 @@ def _cmd_check(_args: argparse.Namespace) -> int:
             errors.append(f"Missing critical dependency: {dep}")
         except Exception as exc:
             errors.append(f"Dependency {dep} error: {exc}")
+    return errors
+
+
+def _cmd_check(_args: argparse.Namespace) -> int:
+    errors: list[str] = [
+        *_check_project_root(),
+        *_check_core_modules_importable(),
+        *_check_version_readable(),
+        *_check_critical_dependencies(),
+    ]
 
     if errors:
         print(f"\n  {len(errors)} issue(s) found:")

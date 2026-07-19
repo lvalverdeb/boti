@@ -16,8 +16,8 @@ import logging
 import tempfile
 from pathlib import Path
 
-from boti.core.logger_handlers import SafeRotatingFileHandler
 from boti.core.logger_filters import PIISecretFilter
+from boti.core.logger_handlers import SafeRotatingFileHandler
 from boti.core.logger_runtime import LoggerRuntime
 
 
@@ -42,7 +42,10 @@ def example_custom_destination() -> None:
 
         log_path = Path(tmp_dir) / "custom.log"
         handler = SafeRotatingFileHandler(
-            log_path, maxBytes=1024 * 1024, backupCount=3, delay=True,
+            log_path,
+            maxBytes=1024 * 1024,
+            backupCount=3,
+            delay=True,
         )
         handler.addFilter(PIISecretFilter())
 
@@ -53,7 +56,8 @@ def example_custom_destination() -> None:
 
         LoggerRuntime.add_destination(
             ("custom_app", str(log_path)),
-            handler, formatter,
+            handler,
+            formatter,
         )
 
         # Emit a log record through a standard logger
@@ -66,7 +70,7 @@ def example_custom_destination() -> None:
         LoggerRuntime.stop_listener()
 
         print(f"  Log written to {log_path}")
-        print(f"  Contents:")
+        print("  Contents:")
         for line in log_path.read_text().splitlines():
             print(f"    {line}")
     print()
@@ -91,10 +95,14 @@ def example_multiple_destinations() -> None:
         stderr_fmt = logging.Formatter("%(levelname)s: %(message)s")
 
         LoggerRuntime.add_destination(
-            ("multi", str(file_path)), file_handler, file_fmt,
+            ("multi", str(file_path)),
+            file_handler,
+            file_fmt,
         )
         LoggerRuntime.add_destination(
-            ("multi", "__stderr__"), stderr_handler, stderr_fmt,
+            ("multi", "__stderr__"),
+            stderr_handler,
+            stderr_fmt,
         )
 
         logger = logging.getLogger("multi")

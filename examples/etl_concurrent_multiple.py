@@ -15,14 +15,13 @@ from __future__ import annotations
 import csv
 import io
 import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from boti.core import ManagedResource, Logger
+from boti.core import Logger, ManagedResource
 from boti.core.filesystem import FilesystemAdapter, FilesystemConfig
-from boti.core.models import LoggerConfig, ResourceConfig
+from boti.core.models import ResourceConfig
 
 
 class MultiSourceEtlResource(ManagedResource):
@@ -126,7 +125,9 @@ def example_concurrent_multiple() -> None:
         with resource, ThreadPoolExecutor(max_workers=4) as pool:
             futures = {
                 pool.submit(
-                    resource.run_source, name, str(base / f"{name}.csv"),
+                    resource.run_source,
+                    name,
+                    str(base / f"{name}.csv"),
                 ): name
                 for name in sources
             }

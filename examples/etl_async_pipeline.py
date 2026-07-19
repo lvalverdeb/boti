@@ -70,10 +70,7 @@ class AsyncEtlResource(ManagedResource):
             *(self.pipeline_for_source(s) for s in sources),
             return_exceptions=True,
         )
-        return {
-            sources[i]: (r if isinstance(r, int) else 0)
-            for i, r in enumerate(results)
-        }
+        return {sources[i]: (r if isinstance(r, int) else 0) for i, r in enumerate(results)}
 
     async def _acleanup(self) -> None:
         self._logger.info("async ETL resource cleaned up")
@@ -86,11 +83,13 @@ async def async_main() -> None:
         for src in ["users", "products", "events"]:
             (data_dir / src).write_text("\n".join(f"row_{i}" for i in range(10)))
 
-        logger = Logger(LoggerConfig(
-            log_dir=data_dir / "logs",
-            logger_name="async_etl",
-            verbose=False,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=data_dir / "logs",
+                logger_name="async_etl",
+                verbose=False,
+            )
+        )
 
         resource = AsyncEtlResource(
             data_dir=data_dir,

@@ -66,6 +66,10 @@ class ProjectService:
                 ProjectService._search_ancestors(candidate, markers=resolved_markers) or candidate
             )
 
+        return ProjectService._detect_project_root_from_candidates(resolved_markers)
+
+    @staticmethod
+    def _detect_project_root_from_candidates(resolved_markers: tuple[Path, ...]) -> Path:
         candidates = list(ProjectService._candidate_search_paths())
         for candidate in candidates:
             detected = ProjectService._search_ancestors(candidate, markers=resolved_markers)
@@ -102,31 +106,38 @@ class ProjectService:
         if pwd:
             raw_candidates.append(pwd)
 
-        for frame in inspect.stack()[1:8]:
-            filename = getattr(frame, "filename", None)
-            if not filename:
-                continue
-            # Skip synthetic filenames: anything starting with "<" (e.g. "<string>",
-            # "<stdin>", "<frozen ...>"), IPython cells, and exec'd code.
-            if filename.startswith("<"):
-                continue
-            if filename.startswith("ipykernel_") or "/ipykernel/" in filename:
-                continue
-            # Require the path to exist on disk before using it as a search anchor.
-            try:
-                p = Path(filename)
-                if not p.exists():
-                    continue
-            except (ValueError, OSError):
-                _logger.debug("Skipping invalid path: %r", filename)
-                continue
-            raw_candidates.append(filename)
+        raw_candidates.extend(ProjectService._stack_frame_candidates())
 
         for raw_candidate in raw_candidates:
             candidate = ProjectService._normalize_search_path(raw_candidate)
             if candidate not in seen:
                 seen.add(candidate)
                 yield candidate
+
+    @staticmethod
+    def _stack_frame_candidates() -> Iterable[str]:
+        for frame in inspect.stack()[1:8]:
+            filename = getattr(frame, "filename", None)
+            if not filename or ProjectService._is_synthetic_frame_filename(filename):
+                continue
+            # Require the path to exist on disk before using it as a search anchor.
+            try:
+                if not Path(filename).exists():
+                    continue
+            except (ValueError, OSError):
+                _logger.debug("Skipping invalid path: %r", filename)
+                continue
+            yield filename
+
+    @staticmethod
+    def _is_synthetic_frame_filename(filename: str) -> bool:
+        # Anything starting with "<" (e.g. "<string>", "<stdin>", "<frozen ...>"),
+        # IPython cells, and exec'd code are not real search anchors.
+        return (
+            filename.startswith("<")
+            or filename.startswith("ipykernel_")
+            or "/ipykernel/" in filename
+        )
 
     @staticmethod
     def _normalize_search_path(path: str | Path) -> Path:
@@ -169,27 +180,10 @@ class ProjectService:
             Path: The path to the environment file used.
         """
         resolved_project_root = Path(project_root).expanduser().resolve()
+        target = ProjectService._resolve_env_target(
+            resolved_project_root, env_file, candidate_files
+        ).resolve()
 
-        if env_file:
-            target = Path(env_file).expanduser()
-            if not target.is_absolute():
-                target = resolved_project_root / target
-        else:
-            candidates = [
-                resolved_project_root / Path(candidate)
-                for candidate in (
-                    candidate_files
-                    if candidate_files is not None
-                    else ProjectService.DEFAULT_ENV_CANDIDATES
-                )
-            ]
-            target = candidates[0]
-            for c in candidates:
-                if c.exists():
-                    target = c
-                    break
-
-        target = target.resolve()
         if not is_secure_path(target, [resolved_project_root]):
             raise PermissionError(
                 f"Environment file {target} must be inside project root {resolved_project_root}."
@@ -205,3 +199,26 @@ class ProjectService:
                 os.environ[key] = value
 
         return target
+
+    @staticmethod
+    def _resolve_env_target(
+        resolved_project_root: Path,
+        env_file: str | Path | None,
+        candidate_files: Iterable[str | Path] | None,
+    ) -> Path:
+        if env_file:
+            target = Path(env_file).expanduser()
+            return target if target.is_absolute() else resolved_project_root / target
+
+        candidates = [
+            resolved_project_root / Path(candidate)
+            for candidate in (
+                candidate_files
+                if candidate_files is not None
+                else ProjectService.DEFAULT_ENV_CANDIDATES
+            )
+        ]
+        for c in candidates:
+            if c.exists():
+                return c
+        return candidates[0]

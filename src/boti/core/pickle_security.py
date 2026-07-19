@@ -110,13 +110,32 @@ class PickleSecurityMixin:
                 self.logger.warning(msg)  # type: ignore[attr-defined]
 
     def __getstate__(self) -> dict[str, Any]:
-        """Drop runtime-only state so subclasses remain pickleable."""
+        """Drop runtime-only state so subclasses remain pickleable.
+
+        Progressively degrades ``state`` (dropping the config logger, then an
+        owned filesystem, then the fs factory) checking picklability after
+        each step, and returns as soon as one succeeds — falling back to the
+        most-degraded state if none do.
+        """
         if not self.config.allow_pickle:  # type: ignore[attr-defined]
             raise TypeError(
                 f"Pickle serialization is disabled for {self.__class__.__name__}. "
                 "Set allow_pickle=True only for trusted distributed workflows."
             )
 
+        state = self._state_without_transient_runtime_attrs()
+        for degrade in (
+            PickleSecurityMixin._clear_config_logger,
+            PickleSecurityMixin._clear_owned_fs,
+            PickleSecurityMixin._clear_fs_factory,
+        ):
+            if self._is_pickleable_state(state):
+                return state
+            degrade(state)
+
+        return state
+
+    def _state_without_transient_runtime_attrs(self) -> dict[str, Any]:
         try:
             state = self.__dict__.copy()
         except AttributeError:
@@ -124,34 +143,35 @@ class PickleSecurityMixin:
                 f"Cannot pickle {self.__class__.__name__}: subclasses using __slots__ "
                 "must override __getstate__/__setstate__."
             ) from None
-        state.pop("_state_lock", None)
-        state.pop("_fs_init_lock", None)
-        state.pop("_aclose_lock", None)
-        state.pop("_closed_event", None)
-        state.pop("_closing_thread", None)
-        state.pop("_closing_task", None)
-        state.pop("_finalizer", None)
-        state.pop("logger", None)
+        for attr in (
+            "_state_lock",
+            "_fs_init_lock",
+            "_aclose_lock",
+            "_closed_event",
+            "_closing_thread",
+            "_closing_task",
+            "_finalizer",
+            "logger",
+        ):
+            state.pop(attr, None)
+        return state
 
-        if self._is_pickleable_state(state):
-            return state
-
+    @staticmethod
+    def _clear_config_logger(state: dict[str, Any]) -> None:
         config = state.get("config")
         if isinstance(config, ResourceConfig) and config.logger is not None:
             state["config"] = config.model_copy(update={"logger": None})
-            if self._is_pickleable_state(state):
-                return state
 
+    @staticmethod
+    def _clear_owned_fs(state: dict[str, Any]) -> None:
         if state.get("_owns_fs") or state.get("fs") is not None:
             state["fs"] = None
-        if self._is_pickleable_state(state):
-            return state
 
+    @staticmethod
+    def _clear_fs_factory(state: dict[str, Any]) -> None:
         if state.get("_fs_factory") is not None:
             state["_fs_factory"] = None
             state["_owns_fs"] = False
-
-        return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         """Rebuild transient runtime state after unpickling."""

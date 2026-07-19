@@ -94,14 +94,14 @@ def example_pipeline() -> None:
         data_dir.mkdir()
 
         # Create project marker
-        (project_root / "pyproject.toml").write_text("[project]\nname='pipeline'\n", encoding="utf-8")
+        (project_root / "pyproject.toml").write_text(
+            "[project]\nname='pipeline'\n", encoding="utf-8"
+        )
 
         # Create input data
         input_file = data_dir / "records.txt"
         input_file.write_text(
-            "id=1,name=alice,value=100\n"
-            "id=2,name=bob,value=200\n"
-            "id=3,name=charlie,value=300\n"
+            "id=1,name=alice,value=100\nid=2,name=bob,value=200\nid=3,name=charlie,value=300\n"
         )
 
         # Create .env with pipeline config
@@ -114,19 +114,23 @@ def example_pipeline() -> None:
         assert os.environ["PIPELINE_MODE"] == "production"
 
         # Step 2: Validate environment bindings
-        bindings = validate_environment_bindings({
-            "PIPELINE_MODE": "production",
-            "PIPELINE_BATCH_SIZE": "100",
-        })
+        bindings = validate_environment_bindings(
+            {
+                "PIPELINE_MODE": "production",
+                "PIPELINE_BATCH_SIZE": "100",
+            }
+        )
         print(f"  validated env: {bindings}")
 
         # Step 3: Set up logging
         log_dir = project_root / "logs"
-        logger = Logger(LoggerConfig(
-            log_dir=log_dir,
-            logger_name="pipeline",
-            log_level=Logger.DEBUG,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=log_dir,
+                logger_name="pipeline",
+                log_level=Logger.DEBUG,
+            )
+        )
         logger.set_level(Logger.DEBUG)
         logger.info("pipeline started", extra={"project_root": str(project_root)})
 
@@ -142,7 +146,6 @@ def example_pipeline() -> None:
             storage_config=storage_config,
             config=ResourceConfig(verbose=True),
         ) as pipeline:
-
             # Read and process records
             content = pipeline.read_input(input_file)
             records = []
@@ -158,10 +161,7 @@ def example_pipeline() -> None:
                     logger.warning("skipped invalid record", extra={"input": rec})
 
             # Write summary output
-            summary = (
-                f"processed: {pipeline.processed_count}\n"
-                f"total: {len(records)}\n"
-            )
+            summary = f"processed: {pipeline.processed_count}\ntotal: {len(records)}\n"
             pipeline.write_output("pipeline-output/summary.txt", summary)
 
             # Verify output

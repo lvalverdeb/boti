@@ -18,9 +18,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from boti.core import ManagedResource, Logger
+from boti.core import Logger, ManagedResource
 from boti.core.filesystem import FilesystemAdapter, FilesystemConfig
-from boti.core.models import LoggerConfig, ResourceConfig
 
 
 class EtlWorkerResource(ManagedResource):
@@ -67,7 +66,6 @@ class EtlWorkerResource(ManagedResource):
 
 
 def example_concurrent_threads() -> None:
-    import threading
 
     with tempfile.TemporaryDirectory() as tmp:
         base = Path(tmp)

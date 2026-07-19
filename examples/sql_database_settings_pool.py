@@ -22,14 +22,16 @@ from boti.core import SqlDatabaseSettings
 
 def example_pool_tuning_from_env() -> None:
     """Pool knobs are read straight from DB_*-prefixed environment variables."""
-    os.environ.update({
-        "DB_CONNECTION_URL": "postgresql://user:pass@localhost:5432/mydb",
-        "DB_POOL_SIZE": "20",
-        "DB_MAX_OVERFLOW": "5",
-        "DB_POOL_TIMEOUT": "10",
-        "DB_POOL_RECYCLE": "900",
-        "DB_POOL_PRE_PING": "true",
-    })
+    os.environ.update(
+        {
+            "DB_CONNECTION_URL": "postgresql://user:pass@localhost:5432/mydb",
+            "DB_POOL_SIZE": "20",
+            "DB_MAX_OVERFLOW": "5",
+            "DB_POOL_TIMEOUT": "10",
+            "DB_POOL_RECYCLE": "900",
+            "DB_POOL_PRE_PING": "true",
+        }
+    )
     try:
         settings = SqlDatabaseSettings()
         engine_kwargs = {
@@ -43,8 +45,12 @@ def example_pool_tuning_from_env() -> None:
         print(f"  engine kwargs: {engine_kwargs}")
     finally:
         for key in (
-            "DB_CONNECTION_URL", "DB_POOL_SIZE", "DB_MAX_OVERFLOW",
-            "DB_POOL_TIMEOUT", "DB_POOL_RECYCLE", "DB_POOL_PRE_PING",
+            "DB_CONNECTION_URL",
+            "DB_POOL_SIZE",
+            "DB_MAX_OVERFLOW",
+            "DB_POOL_TIMEOUT",
+            "DB_POOL_RECYCLE",
+            "DB_POOL_PRE_PING",
         ):
             os.environ.pop(key, None)
     print()

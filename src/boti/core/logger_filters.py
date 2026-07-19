@@ -50,7 +50,7 @@ class PIISecretFilter(logging.Filter):
 
     # Attributes that are part of LogRecord's standard schema — never redacted
     # as "extra" fields even if their names happen to match a sensitive keyword.
-    _LOGRECORD_STDLIB_ATTRS: frozenset[str] = frozenset(
+    LOGRECORD_STDLIB_ATTRS: frozenset[str] = frozenset(
         {
             "name",
             "msg",
@@ -87,7 +87,7 @@ class PIISecretFilter(logging.Filter):
         # Deep-redact structured extra fields added via ``logging.info(..., extra={...})``
         # but leave standard LogRecord attributes alone.
         for key in list(record.__dict__.keys()):
-            if key in self._LOGRECORD_STDLIB_ATTRS:
+            if key in self.LOGRECORD_STDLIB_ATTRS:
                 continue
             if str(key).lower() in self._SENSITIVE_KEYS:
                 record.__dict__[key] = "[REDACTED]"

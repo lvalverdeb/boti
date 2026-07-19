@@ -51,6 +51,24 @@ class FsspecMixin:
             self.fs = None
         super()._release_transient_state()  # type: ignore[misc]
 
+    def _fs_fast_path(
+        self,
+    ) -> tuple[fsspec.AbstractFileSystem | None, Callable[[], fsspec.AbstractFileSystem] | None]:
+        """Under ``_state_lock``: return the existing fs, or the factory to build one.
+
+        Returns ``(fs, None)`` if a filesystem already exists or there is no
+        factory to build one (``fs`` is ``None`` in that case too — nothing
+        to do). Returns ``(None, factory)`` if the caller should proceed to
+        the single-flight build in ``_ensure_fs``.
+        """
+        with self._state_lock:  # type: ignore[attr-defined]
+            self._assert_open()  # type: ignore[attr-defined]
+            if self.fs is not None:
+                return self.fs, None
+            if self._fs_factory is None:
+                return None, None
+            return None, self._fs_factory
+
     def _ensure_fs(self) -> fsspec.AbstractFileSystem | None:
         """Lazy-loads the filesystem if a factory is provided.
 
@@ -58,13 +76,9 @@ class FsspecMixin:
         (potentially seconds of retries) cannot block ``closed``/``close()``
         in other threads.  ``_fs_init_lock`` keeps factory calls single-flight.
         """
-        with self._state_lock:  # type: ignore[attr-defined]
-            self._assert_open()  # type: ignore[attr-defined]
-            if self.fs is not None:
-                return self.fs
-            if self._fs_factory is None:
-                return None
-            factory = self._fs_factory
+        fs, factory = self._fs_fast_path()
+        if factory is None:
+            return fs
 
         with self._fs_init_lock:
             with self._state_lock:  # type: ignore[attr-defined]

@@ -59,9 +59,7 @@ def example_multiprocessing_etl() -> None:
 
         for i in range(1, 6):
             (data_dir / f"batch_{i}.csv").write_text(
-                "id,value\n" + "\n".join(
-                    f"{j},{j * 10}" for j in range(1, 101)
-                ),
+                "id,value\n" + "\n".join(f"{j},{j * 10}" for j in range(1, 101)),
             )
 
         config = ResourceConfig(allow_pickle=True)
@@ -69,9 +67,7 @@ def example_multiprocessing_etl() -> None:
         payload = pickle.dumps(resource)
         resource.close()
 
-        filenames = sorted(
-            p.name for p in data_dir.iterdir() if p.suffix == ".csv"
-        )
+        filenames = sorted(p.name for p in data_dir.iterdir() if p.suffix == ".csv")
 
         with multiprocessing.Pool(
             processes=4,

@@ -30,10 +30,10 @@ def example_validate_env_var_name() -> None:
         ("MY_VAR", True),
         ("_secret", True),
         ("var1", True),
-        ("1var", False),       # starts with digit
-        ("my-var", False),     # hyphen not allowed
-        ("my var", False),     # space not allowed
-        ("", False),           # empty
+        ("1var", False),  # starts with digit
+        ("my-var", False),  # hyphen not allowed
+        ("my var", False),  # space not allowed
+        ("", False),  # empty
     ]
     for name, expected in cases:
         result = is_valid_env_var_name(name)

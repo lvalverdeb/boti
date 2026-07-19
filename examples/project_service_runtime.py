@@ -48,8 +48,7 @@ def main() -> dict[str, str]:
             print(f"Detected runtime root: {result['detected_root']}")
             print(f"Loaded runtime env: {result['used_env']}")
             print(
-                "Runtime settings: "
-                f"mode={result['runtime_mode']} region={result['runtime_region']}"
+                f"Runtime settings: mode={result['runtime_mode']} region={result['runtime_region']}"
             )
             return result
     finally:

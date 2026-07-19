@@ -14,7 +14,9 @@ from boti.core import ProjectService
 def main() -> None:
     with TemporaryDirectory() as tmp_dir:
         project_root = Path(tmp_dir)
-        (project_root / "pyproject.toml").write_text("[project]\nname='example'\n", encoding="utf-8")
+        (project_root / "pyproject.toml").write_text(
+            "[project]\nname='example'\n", encoding="utf-8"
+        )
         nested = project_root / "src" / "demo"
         nested.mkdir(parents=True)
 

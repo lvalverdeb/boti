@@ -82,10 +82,12 @@ def example_symlink_rejected(project_root: Path) -> None:
         return
 
     try:
-        SecureResource(config=ResourceConfig(
-            project_root=project_root,
-            extra_allowed_paths=[str(symlink_path)],
-        ))
+        SecureResource(
+            config=ResourceConfig(
+                project_root=project_root,
+                extra_allowed_paths=[str(symlink_path)],
+            )
+        )
     except ValueError as exc:
         print(f"  blocked: {exc}")
 
@@ -102,7 +104,9 @@ def main() -> None:
     print("=== SecureResource examples ===\n")
     with tempfile.TemporaryDirectory() as tmp_dir:
         project_root = Path(tmp_dir)
-        (project_root / "pyproject.toml").write_text("[project]\nname='example'\n", encoding="utf-8")
+        (project_root / "pyproject.toml").write_text(
+            "[project]\nname='example'\n", encoding="utf-8"
+        )
         example_basic_io(project_root)
         print()
         example_traversal_rejected(project_root)

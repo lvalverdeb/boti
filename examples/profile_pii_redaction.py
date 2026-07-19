@@ -22,6 +22,7 @@ from boti.core.logger_filters import PIISecretFilter
 # Payload factories
 # ---------------------------------------------------------------------------
 
+
 def _make_shallow_pii_record() -> dict[str, Any]:
     """Flat dict with a mix of sensitive and benign keys."""
     return {
@@ -134,6 +135,7 @@ def bench_clean_records(filt: PIISecretFilter) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     filt = PIISecretFilter()
 
@@ -150,7 +152,7 @@ def main() -> None:
         t0 = time.perf_counter()
         fn(filt)
         elapsed = time.perf_counter() - t0
-        print(f"  {label:<30s}  {elapsed*1000:7.1f} ms  ({N/elapsed:,.0f} rec/s)")
+        print(f"  {label:<30s}  {elapsed * 1000:7.1f} ms  ({N / elapsed:,.0f} rec/s)")
 
     print()
 

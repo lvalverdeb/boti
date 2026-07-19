@@ -104,9 +104,7 @@ async def example_agent_swarm() -> None:
     """
     agents = [EchoLLMAgent(f"worker-{i}", skip_logger=True) for i in range(5)]
     try:
-        replies = await asyncio.gather(
-            *(agent.ask(f"task #{i}") for i, agent in enumerate(agents))
-        )
+        replies = await asyncio.gather(*(agent.ask(f"task #{i}") for i, agent in enumerate(agents)))
         for reply in replies:
             print(f"  {reply}")
     finally:
@@ -123,8 +121,10 @@ async def example_sync_only_agent_via_aclose_fallback() -> None:
     agent.call_blocking_tool()
     await agent.aclose()
 
-    print(f"  closed={agent.closed}, calls={agent.calls}, "
-          f"flushed via to_thread fallback={agent.flushed}")
+    print(
+        f"  closed={agent.closed}, calls={agent.calls}, "
+        f"flushed via to_thread fallback={agent.flushed}"
+    )
     print()
 
 

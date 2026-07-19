@@ -21,11 +21,13 @@ from boti.core.models import LoggerConfig
 def example_basic_bind() -> None:
     """A bound logger automatically attaches its context to every call."""
     with TemporaryDirectory() as tmp_dir:
-        logger = Logger(LoggerConfig(
-            log_dir=Path(tmp_dir) / "logs",
-            logger_name="examples.bind.basic",
-            debug=True,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=Path(tmp_dir) / "logs",
+                logger_name="examples.bind.basic",
+                debug=True,
+            )
+        )
         logger.set_level(Logger.DEBUG)
 
         request_logger = logger.bind(request_id="req-42", user="alice")
@@ -39,11 +41,13 @@ def example_basic_bind() -> None:
 def example_chained_bind() -> None:
     """Successive bind() calls accumulate fields rather than replacing them."""
     with TemporaryDirectory() as tmp_dir:
-        logger = Logger(LoggerConfig(
-            log_dir=Path(tmp_dir) / "logs",
-            logger_name="examples.bind.chained",
-            debug=True,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=Path(tmp_dir) / "logs",
+                logger_name="examples.bind.chained",
+                debug=True,
+            )
+        )
         logger.set_level(Logger.DEBUG)
 
         job_logger = logger.bind(job_id="job-1")
@@ -58,11 +62,13 @@ def example_chained_bind() -> None:
 def example_bind_isolation() -> None:
     """bind() returns a copy — the parent logger's context is untouched."""
     with TemporaryDirectory() as tmp_dir:
-        logger = Logger(LoggerConfig(
-            log_dir=Path(tmp_dir) / "logs",
-            logger_name="examples.bind.isolation",
-            debug=True,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=Path(tmp_dir) / "logs",
+                logger_name="examples.bind.isolation",
+                debug=True,
+            )
+        )
         logger.set_level(Logger.DEBUG)
 
         child = logger.bind(trace_id="trace-99")
@@ -77,11 +83,13 @@ def example_bind_isolation() -> None:
 def example_bind_with_pii_redaction() -> None:
     """Bound context is subject to the same PII redaction as any extra dict."""
     with TemporaryDirectory() as tmp_dir:
-        logger = Logger(LoggerConfig(
-            log_dir=Path(tmp_dir) / "logs",
-            logger_name="examples.bind.pii",
-            debug=True,
-        ))
+        logger = Logger(
+            LoggerConfig(
+                log_dir=Path(tmp_dir) / "logs",
+                logger_name="examples.bind.pii",
+                debug=True,
+            )
+        )
         logger.set_level(Logger.DEBUG)
 
         session_logger = logger.bind(session_id="sess-1", api_key="sk-live-XXXXXXXX")

@@ -93,8 +93,10 @@ def example_getstate_tolerates_missing_fs_mixin() -> None:
     ledger = Ledger(name="fs-free", config=ResourceConfig(allow_pickle=True))
     state = ledger.__getstate__()
     print(f"  state keys: {sorted(state)}")
-    print(f"  no 'fs'/'_fs_factory'/'_owns_fs' keys present: "
-          f"{not {'fs', '_fs_factory', '_owns_fs'} & state.keys()}")
+    print(
+        f"  no 'fs'/'_fs_factory'/'_owns_fs' keys present: "
+        f"{not {'fs', '_fs_factory', '_owns_fs'} & state.keys()}"
+    )
     ledger.close()
     print()
 

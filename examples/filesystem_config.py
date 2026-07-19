@@ -22,6 +22,7 @@ from boti.core.filesystem import FilesystemAdapter, FilesystemConfig, create_fil
 # 1. Local file access
 # ---------------------------------------------------------------------------
 
+
 def example_local_files() -> None:
     """Write and read a file on the local filesystem via FilesystemConfig."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -46,6 +47,7 @@ def example_local_files() -> None:
 # 2. In-memory filesystem (no disk I/O)
 # ---------------------------------------------------------------------------
 
+
 def example_memory_filesystem() -> None:
     """Use the memory backend for ephemeral or test workflows."""
     config = FilesystemConfig(fs_type="memory", fs_path="scratch")
@@ -65,6 +67,7 @@ def example_memory_filesystem() -> None:
 # 3. FilesystemAdapter with caching
 # ---------------------------------------------------------------------------
 
+
 def example_filesystem_adapter() -> None:
     """
     FilesystemAdapter wraps FilesystemConfig and caches the live filesystem
@@ -73,12 +76,12 @@ def example_filesystem_adapter() -> None:
     config = FilesystemConfig(fs_type="memory", fs_path="adapter-demo")
     adapter = FilesystemAdapter(config)
 
-    fs = adapter.get_filesystem()     # creates and caches the client
-    fs2 = adapter.get_filesystem()    # returns cached instance
+    fs = adapter.get_filesystem()  # creates and caches the client
+    fs2 = adapter.get_filesystem()  # returns cached instance
     assert fs is fs2, "adapter must return the same cached instance"
 
-    adapter.invalidate()              # drop the cache (useful after credential rotation)
-    fs3 = adapter.get_filesystem()    # new instance
+    adapter.invalidate()  # drop the cache (useful after credential rotation)
+    fs3 = adapter.get_filesystem()  # new instance
     assert fs3 is not None
 
     print(f"[adapter] storage_path={adapter.storage_path!r}")
@@ -87,6 +90,7 @@ def example_filesystem_adapter() -> None:
 # ---------------------------------------------------------------------------
 # 4. S3-compatible configuration (config structure only)
 # ---------------------------------------------------------------------------
+
 
 def example_s3_config_structure() -> None:
     """
@@ -97,7 +101,7 @@ def example_s3_config_structure() -> None:
         fs_type="s3",
         fs_path="analytics-bucket/raw/events",
         fs_key="ACCESS_KEY",
-        fs_secret="SECRET_KEY",                         # type: ignore[arg-type]
+        fs_secret="SECRET_KEY",  # type: ignore[arg-type]
         fs_endpoint="https://minio.internal.example",
         fs_region="eu-west-1",
     )
@@ -114,11 +118,12 @@ def example_s3_config_structure() -> None:
 # 5. Other backend configurations (README 'Other supported filesystems')
 # ---------------------------------------------------------------------------
 
+
 def example_other_backends() -> None:
     """Construct configs for various fsspec backends without connecting."""
     memory_config = FilesystemConfig(fs_type="memory", fs_path="scratch")
-    gcs_config    = FilesystemConfig(fs_type="gcs",    fs_path="my-bucket/datasets")
-    azure_config  = FilesystemConfig(fs_type="az",     fs_path="container/path")
+    gcs_config = FilesystemConfig(fs_type="gcs", fs_path="my-bucket/datasets")
+    azure_config = FilesystemConfig(fs_type="az", fs_path="container/path")
 
     for cfg in (memory_config, gcs_config, azure_config):
         print(f"[backends] {cfg.fs_type!r:10s}  storage_path={cfg.storage_path!r}")
@@ -127,6 +132,7 @@ def example_other_backends() -> None:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     example_local_files()

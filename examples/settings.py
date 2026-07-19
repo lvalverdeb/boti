@@ -83,9 +83,7 @@ def example_load_dotenv_values() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         env_file = Path(tmp_dir) / ".env"
         env_file.write_text(
-            "DATABASE_URL=postgresql://localhost:5432/db\n"
-            "LOG_LEVEL=debug\n"
-            "FEATURE_FLAG_X=true\n"
+            "DATABASE_URL=postgresql://localhost:5432/db\nLOG_LEVEL=debug\nFEATURE_FLAG_X=true\n"
         )
 
         values = load_dotenv_values(env_file)

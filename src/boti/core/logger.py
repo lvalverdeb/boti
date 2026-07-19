@@ -8,6 +8,7 @@ PII redaction, and optional asynchronous queue-based handlers.
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 import os
 import sys
@@ -45,7 +46,7 @@ class _ExtraFieldsFormatter(logging.Formatter):
         extras = {
             k: v
             for k, v in record.__dict__.items()
-            if k not in PIISecretFilter._LOGRECORD_STDLIB_ATTRS and not k.startswith("_")
+            if k not in PIISecretFilter.LOGRECORD_STDLIB_ATTRS and not k.startswith("_")
         }
         base = super().format(record)
         if not extras:
@@ -113,12 +114,7 @@ class Logger:
         Factory method for quick instantiation with sensible defaults.
         """
         if logger_name is None:
-            try:
-                # Use caller's module name
-                caller_frame = sys._getframe(1)
-                logger_name = caller_frame.f_globals.get("__name__", cls.DEFAULT_LOGGER_NAME)
-            except (ValueError, AttributeError):
-                logger_name = cls.DEFAULT_LOGGER_NAME
+            logger_name = cls._caller_module_name()
 
         resolved_log_dir = cls._resolve_log_dir(log_dir, base_dir=base_dir)
         effective_log_file = log_file or logger_name
@@ -145,6 +141,27 @@ class Logger:
                 cls._default_logger_cache.move_to_end(cache_key)
             return logger
 
+    @classmethod
+    def _caller_module_name(cls) -> str:
+        """The ``__name__`` of ``default_logger()``'s caller's module, if resolvable.
+
+        ``inspect.currentframe()`` is the public counterpart of
+        ``sys._getframe()``, though it delegates to it internally and can
+        still raise/return ``None`` if frame introspection is unavailable on
+        this runtime.
+        """
+        try:
+            frame = inspect.currentframe()
+            # Two hops: past this method's own frame, then past default_logger()'s.
+            caller_frame = frame.f_back.f_back if frame is not None and frame.f_back else None
+            return (
+                caller_frame.f_globals.get("__name__", cls.DEFAULT_LOGGER_NAME)
+                if caller_frame is not None
+                else cls.DEFAULT_LOGGER_NAME
+            )
+        except (ValueError, AttributeError):
+            return cls.DEFAULT_LOGGER_NAME
+
     @staticmethod
     def _resolve_log_dir(
         log_dir: str | Path,
@@ -162,6 +179,15 @@ class Logger:
         )
         return (anchor / path).resolve()
 
+    @property
+    def core(self) -> logging.Logger:
+        """The underlying stdlib ``logging.Logger`` instance."""
+        return self._core
+
+    # Genuine public API (used by managed_resource.py/agent.py and documented
+    # in README); the underlying object is already exposed via the `core`
+    # property above.
+    # spaghetti-ignore[pass-through-method]
     def set_level(self, level: int) -> None:
         """Update the logging level."""
         self._core.setLevel(level)
@@ -231,12 +257,12 @@ class Logger:
         console_key = (self.logger_name, "__console__")
         fmt = _default_formatter()
 
-        with LoggerRuntime._lock:
+        with LoggerRuntime.lock:
             LoggerRuntime.ensure_listener()
 
             # Attach QueueHandler to this logger
             if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
-                qh = QueueHandler(LoggerRuntime._ensure_queue())
+                qh = QueueHandler(LoggerRuntime.ensure_queue())
                 qh.addFilter(PIISecretFilter())
                 self._core.addHandler(qh)
 
@@ -254,10 +280,10 @@ class Logger:
     def _setup_stderr_only_handler(self) -> None:
         """Attach a simple stderr handler when file logging is unavailable."""
         fmt = _default_formatter()
-        with LoggerRuntime._lock:
+        with LoggerRuntime.lock:
             LoggerRuntime.ensure_listener()
             if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
-                qh = QueueHandler(LoggerRuntime._ensure_queue())
+                qh = QueueHandler(LoggerRuntime.ensure_queue())
                 qh.addFilter(PIISecretFilter())
                 self._core.addHandler(qh)
             console_key = (self.logger_name, "__console__")

@@ -97,7 +97,9 @@ def main() -> None:
         for fs_type in sorted(_ALLOWED_FS_TYPES):
             spec = specs.get(fs_type, BackendSpec(fs_path="/", fs_options={}))
             try:
-                config = FilesystemConfig(fs_type=fs_type, fs_path=spec.fs_path, fs_options=spec.fs_options)
+                config = FilesystemConfig(
+                    fs_type=fs_type, fs_path=spec.fs_path, fs_options=spec.fs_options
+                )
                 adapter = FilesystemAdapter(config, max_attempts=1)
                 adapter.get_filesystem()
                 status = "ok"
@@ -111,4 +113,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
