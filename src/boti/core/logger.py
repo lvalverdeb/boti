@@ -75,6 +75,20 @@ class Logger:
     _default_logger_cache: OrderedDict[tuple[Path, str, str, int], Logger] = OrderedDict()
     _default_logger_lock = threading.RLock()
 
+    # Log directory: owner read/write/execute only, no group/other access.
+    _LOG_DIR_MODE = 0o700
+    # Log file: owner read/write only, no group/other access.
+    _LOG_FILE_MODE = 0o600
+    # Frames to skip in stdlib logging/warnings' caller attribution so a
+    # log record's or warning's reported filename/lineno points at the
+    # actual call site, not this Logger's own internals.
+    _CALLER_STACKLEVEL = 3
+
+    # Rotate the log file once it reaches this size...
+    _LOG_FILE_MAX_BYTES = 5 * 1024 * 1024  # 5 MiB
+    # ...keeping this many rotated backups before the oldest is deleted.
+    _LOG_FILE_BACKUP_COUNT = 5
+
     DEBUG = logging.DEBUG
     INFO = logging.INFO
     WARNING = logging.WARNING
@@ -195,7 +209,7 @@ class Logger:
     def _log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         extra: _LogExtra = kwargs.pop("extra", None)
         merged_extra = {**self._extra, **(extra or {})}
-        kwargs.setdefault("stacklevel", 3)
+        kwargs.setdefault("stacklevel", self._CALLER_STACKLEVEL)
         if merged_extra:
             logging.LoggerAdapter(self._core, merged_extra).log(level, msg, *args, **kwargs)
         else:
@@ -240,12 +254,12 @@ class Logger:
                 f"Logger '{self.logger_name}' could not create log directory "
                 f"'{self.log_dir}': {exc}. Falling back to stderr only.",
                 RuntimeWarning,
-                stacklevel=3,
+                stacklevel=self._CALLER_STACKLEVEL,
             )
             self._setup_stderr_only_handler()
             return
 
-        self._restrict_permissions(self.log_dir, 0o700)
+        self._restrict_permissions(self.log_dir, self._LOG_DIR_MODE)
 
         log_file_path = self.log_dir / f"{self.log_file}.log"
         self._ensure_secure_log_file(log_file_path)
@@ -270,7 +284,10 @@ class Logger:
             LoggerRuntime.add_destination(
                 file_key,
                 SafeRotatingFileHandler(
-                    log_file_path, maxBytes=5 * 1024 * 1024, backupCount=5, delay=True
+                    log_file_path,
+                    maxBytes=self._LOG_FILE_MAX_BYTES,
+                    backupCount=self._LOG_FILE_BACKUP_COUNT,
+                    delay=True,
                 ),
                 fmt,
             )
@@ -298,10 +315,12 @@ class Logger:
     def _ensure_secure_log_file(cls, path: Path) -> None:
         try:
             # Atomically attempt to create the file exclusively without following symlinks
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_WRONLY, 0o600)
+            fd = os.open(
+                path, os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_WRONLY, cls._LOG_FILE_MODE
+            )
             os.close(fd)
         except FileExistsError:
             # File exists, check if it's securely structured and not a planted symlink.
             if path.is_symlink():
                 raise ValueError(f"log_file must not be a symlink: {path}") from None
-            cls._restrict_permissions(path, 0o600)
+            cls._restrict_permissions(path, cls._LOG_FILE_MODE)
