@@ -40,6 +40,11 @@ class ProjectService:
         Path(".env.local"),
     )
 
+    # How many caller frames to inspect when hunting for a search-path anchor.
+    # Deep enough to see past typical wrapper/decorator/test-runner frames
+    # without walking the entire stack on every call.
+    _MAX_STACK_FRAMES_FOR_SEARCH: int = 8
+
     @staticmethod
     def detect_project_root(
         start_path: str | Path | None = None,
@@ -116,7 +121,7 @@ class ProjectService:
 
     @staticmethod
     def _stack_frame_candidates() -> Iterable[str]:
-        for frame in inspect.stack()[1:8]:
+        for frame in inspect.stack()[1 : ProjectService._MAX_STACK_FRAMES_FOR_SEARCH]:
             filename = getattr(frame, "filename", None)
             if not filename or ProjectService._is_synthetic_frame_filename(filename):
                 continue

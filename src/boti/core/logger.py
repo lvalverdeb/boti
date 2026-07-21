@@ -201,7 +201,7 @@ class Logger:
     # Genuine public API (used by managed_resource.py/agent.py and documented
     # in README); the underlying object is already exposed via the `core`
     # property above.
-    # spaghetti-ignore[pass-through-method]
+    # spaghetti-ignore[pass-through-method]: see above
     def set_level(self, level: int) -> None:
         """Update the logging level."""
         self._core.setLevel(level)
