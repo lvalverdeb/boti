@@ -64,6 +64,12 @@ _ALLOWED_FS_TYPES: frozenset[str] = frozenset(
     }
 )
 
+# Backend identifiers dispatched on explicitly below (storage_path's s3://
+# prefixing, _build_pyarrow_filesystem's backend selection), named rather
+# than repeated as bare string literals at each comparison site.
+_FS_TYPE_FILE = "file"
+_FS_TYPE_S3 = "s3"
+
 # Operator-configurable allowlist for storage endpoints.  Use
 # ``add_endpoint_to_allowlist("minio.internal:9000")`` at startup to permit
 # specific internal endpoints that would otherwise be blocked by the private-IP
@@ -227,7 +233,7 @@ class FilesystemConfig(BaseModel):
 
     @property
     def storage_path(self) -> str:
-        if self.fs_type == "s3" and not self.fs_path.startswith("s3://"):
+        if self.fs_type == _FS_TYPE_S3 and not self.fs_path.startswith("s3://"):
             return f"s3://{self.fs_path}"
         return self.fs_path
 
@@ -259,6 +265,9 @@ _RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
     ConnectionError,
 )
 
+# Exponential back-off base: each retry's delay doubles relative to the last.
+_BACKOFF_MULTIPLIER = 2
+
 
 def _with_retry[T](
     fn: Callable[[], T],
@@ -289,7 +298,7 @@ def _with_retry[T](
             last_exc = exc
             if attempt == max_attempts:
                 break
-            delay = base_delay * (2 ** (attempt - 1))
+            delay = base_delay * (_BACKOFF_MULTIPLIER ** (attempt - 1))
             _logger.warning(
                 "boti.filesystem: %s failed (attempt %d/%d): %s -- retrying in %.1fs",
                 label,
@@ -361,10 +370,10 @@ class FilesystemAdapter:
             return self._arrow_fs, self._arrow_base_path
 
     def _build_pyarrow_filesystem(self) -> tuple[pafs.FileSystem, str]:
-        if self.config.fs_type == "file":
+        if self.config.fs_type == _FS_TYPE_FILE:
             return pafs.LocalFileSystem(), self.storage_path.replace("file://", "")
 
-        if self.config.fs_type == "s3":
+        if self.config.fs_type == _FS_TYPE_S3:
             return (
                 pafs.S3FileSystem(**_pyarrow_s3_kwargs_with_compat(self.config)),
                 self.storage_path.replace("s3://", "", 1),
