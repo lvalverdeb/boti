@@ -9,22 +9,44 @@ __all__ = ["PIISecretFilter"]
 # Matches sensitive data patterns in strings:
 # 1. Explicit assignments:  ``key=value`` or ``key: value``
 # 2. Inline description:    ``key is: value``, ``key is value``, ``key is 'value'``
-# A plain word like "access_key" in "Loaded access_key from env" does NOT match
-# because there is no value following it.
+# Used against individual arg/extra-field *values* (_redact_args/_redact_value),
+# where the keyword and value are already co-located in the same string being
+# tested — a bare keyword mention there ("this dict's key is 'access_key'")
+# genuinely doesn't need redacting on its own.
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
     r"(?i)\b(?:password|passwd|secret|token|api_key|access_key|auth_token|authorization|bearer)"
     r"(?:\s+is\s*[=:]?\s*|\s*[=:]\s*)\S+"
 )
 
+# Matches a bare sensitive keyword anywhere in a string, with no requirement
+# that a value immediately follow it. Used only against record.msg (the raw
+# format string) in filter(): a message can mention a keyword ("token for
+# user %s is %s", "Authorization header value: %s") with the actual secret
+# arriving later as a %s/{}-substitution arg that doesn't itself look like
+# key=value — _SENSITIVE_ASSIGNMENT_RE alone misses that split entirely, since
+# it requires the keyword and delimiter to be textually adjacent. Trading some
+# over-redaction (a message merely mentioning "does not require a password"
+# also gets fully redacted) for closing that leak is the safe failure
+# direction for a security filter.
+_SENSITIVE_KEYWORD_RE = re.compile(
+    r"(?i)\b(?:password|passwd|secret|token|api_key|access_key|auth_token|authorization|bearer)\b"
+)
+
 
 class PIISecretFilter(logging.Filter):
-    """Redact secrets from log records without suppressing innocent messages.
+    """Redact secrets from log records, favouring over-redaction over a leak.
 
     Strategy:
-    - Format string (``record.msg``): redacted only when it contains an
-      explicit key=value, key: value, or "key is: value" pattern for a
-      sensitive keyword.  Plain mentions like "loaded access_key from env"
-      are preserved so operational log messages remain useful.
+    - Format string (``record.msg``): redacted whenever it mentions a
+      sensitive keyword anywhere at all, even a bare mention with no value
+      immediately following ("does not require a password" is redacted too).
+      This is deliberately coarse: a keyword can appear in the message while
+      the actual secret arrives later as a %s/{}-substitution arg that
+      doesn't itself look like ``key=value`` ("token for user %s is %s") —
+      requiring textual adjacency between the keyword and the value missed
+      that split entirely. Over-redacting an innocent mention is the safe
+      failure direction for a security filter; under-redacting a real secret
+      is not.
     - Positional args: each string arg is inspected for sensitive assignment
       patterns and redacted if found.
     - Keyword args (dict): values for sensitive keys are always redacted;
@@ -78,7 +100,7 @@ class PIISecretFilter(logging.Filter):
     )
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if isinstance(record.msg, str) and _SENSITIVE_ASSIGNMENT_RE.search(record.msg):
+        if isinstance(record.msg, str) and _SENSITIVE_KEYWORD_RE.search(record.msg):
             record.msg = self._REDACTED_MESSAGE
             record.args = ()
         elif record.args:

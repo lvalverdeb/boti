@@ -103,7 +103,17 @@ def _allowlist_endpoint_from_url(endpoint: str) -> None:
 
 
 class FilesystemConfig(BaseModel):
-    """Typed configuration for local and remote filesystem profiles."""
+    """Typed configuration for local and remote filesystem profiles.
+
+    ``fs_endpoint`` is validated against literal private/reserved IP
+    addresses and reserved hostnames (see ``validate_fs_endpoint``) to block
+    SSRF via a directly-supplied private address. This does **not** cover
+    hostname-based SSRF via DNS rebinding — a public DNS name that resolves
+    to a private IP (e.g. a ``nip.io``-style domain) is not checked, since
+    DNS resolution is intentionally avoided here to keep validation fast and
+    deterministic. Preventing that is the operator's responsibility via
+    network egress controls, not this validator's.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

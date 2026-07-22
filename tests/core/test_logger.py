@@ -66,6 +66,44 @@ def test_logger_pii_redaction_clears_sensitive_args(temp_log_dir):
     assert "secret123" not in content
 
 
+@pytest.mark.parametrize(
+    ("msg", "args"),
+    [
+        ("token for user %s is %s", ("alice", "sk-supersecret-12345")),
+        ("the api_key belonging to tenant acme: %s", ("sk-supersecret-12345",)),
+        ("Authorization header value: %s", ("Bearer sk-supersecret-12345",)),
+    ],
+)
+def test_pii_secret_filter_redacts_keyword_and_value_split_across_args(msg, args) -> None:
+    """Regression: a sensitive keyword mentioned in the format string, with the
+    actual secret arriving later as a %s-substitution arg that doesn't itself
+    look like key=value, used to leak entirely — the message-level check
+    required the keyword and a delimiter to be textually adjacent, and the
+    arg-level check only redacts an arg whose own content looks like
+    key=value. Neither half alone caught this split."""
+    record = logging.LogRecord("test", logging.INFO, "f.py", 1, msg, args, None)
+    pii_filter = PIISecretFilter()
+    pii_filter.filter(record)
+    rendered = record.getMessage()
+
+    assert rendered == PIISecretFilter._REDACTED_MESSAGE
+    for value in args:
+        assert value not in rendered
+
+
+def test_pii_secret_filter_over_redacts_bare_keyword_mentions() -> None:
+    """The safe-failure-direction tradeoff, made explicit: a message merely
+    mentioning a sensitive keyword with no value at all is now also redacted,
+    even though it carries nothing sensitive."""
+    record = logging.LogRecord(
+        "test", logging.INFO, "f.py", 1, "does not require a password", (), None
+    )
+    pii_filter = PIISecretFilter()
+    pii_filter.filter(record)
+
+    assert record.getMessage() == PIISecretFilter._REDACTED_MESSAGE
+
+
 def test_logger_pii_redaction_masks_sensitive_extra_fields():
     """Verify sensitive extra fields are redacted on the log record itself."""
     record = logging.LogRecord(
