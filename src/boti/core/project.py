@@ -171,6 +171,7 @@ class ProjectService:
         env_file: str | Path | None = None,
         *,
         candidate_files: Iterable[str | Path] | None = None,
+        override: bool = False,
     ) -> Path:
         """
         Loads environment variables from a .env file into os.environ.
@@ -180,6 +181,10 @@ class ProjectService:
             env_file: Optional explicit path to an env file.
             candidate_files: Optional relative candidate env paths
                 to probe when env_file is omitted.
+            override: When False (the default, matching python-dotenv's own
+                load_dotenv()), a key already present in os.environ is left
+                alone rather than being overwritten by the .env file's value.
+                Set True to force the .env file to win.
 
         Returns:
             Path: The path to the environment file used.
@@ -201,7 +206,8 @@ class ProjectService:
                 raise ValueError(f"Invalid environment bindings in {target}: {exc}") from exc
 
             for key, value in dotenv_values.items():
-                os.environ[key] = value
+                if override or key not in os.environ:
+                    os.environ[key] = value
 
         return target
 

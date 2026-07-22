@@ -164,6 +164,34 @@ def test_setup_environment_supports_custom_candidate_files(monkeypatch, temp_pro
     assert os.environ["BOTI_TEST_ENV"] == "custom"
 
 
+def test_setup_environment_does_not_clobber_existing_env_var_by_default(
+    monkeypatch, temp_project_root
+):
+    """A key already present in os.environ must win over the .env file's value
+    unless override=True is passed explicitly — matching python-dotenv's own
+    load_dotenv() convention. Regression test for the silent-clobber bug where
+    a test suite's ephemeral env vars got overwritten back to .env's values on
+    every fresh ProjectService.setup_environment() call."""
+    env_file = temp_project_root / ".env.local"
+    env_file.write_text("BOTI_TEST_ENV='from_dotenv'\n", encoding="utf-8")
+    monkeypatch.setenv("BOTI_TEST_ENV", "already_set")
+
+    ProjectService.setup_environment(temp_project_root, ".env.local")
+
+    assert os.environ["BOTI_TEST_ENV"] == "already_set"
+
+
+def test_setup_environment_override_true_lets_dotenv_win(monkeypatch, temp_project_root):
+    """override=True restores the old always-clobber behavior explicitly."""
+    env_file = temp_project_root / ".env.local"
+    env_file.write_text("BOTI_TEST_ENV='from_dotenv'\n", encoding="utf-8")
+    monkeypatch.setenv("BOTI_TEST_ENV", "already_set")
+
+    ProjectService.setup_environment(temp_project_root, ".env.local", override=True)
+
+    assert os.environ["BOTI_TEST_ENV"] == "from_dotenv"
+
+
 def test_secure_resource_default_logger_uses_project_root(temp_project_root):
     """Verify default logger paths are anchored to the configured project root."""
     config = ResourceConfig(project_root=temp_project_root)
