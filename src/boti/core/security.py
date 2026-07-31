@@ -125,14 +125,14 @@ def validate_environment_bindings(bindings: Mapping[str, str]) -> dict[str, str]
     """Validate dotenv-style environment bindings before applying them to os.environ."""
     validated: dict[str, str] = {}
     for key, value in bindings.items():
-        if "\x00" in key:
+        if "\x00" in key:  # nosec CWE-158 -- detected and rejected on the next line
             raise ValueError("Environment variable names must not contain NUL bytes.")
         if not is_valid_env_var_name(key):
             raise ValueError(
                 f"Invalid environment variable name '{key}'. "
                 "Names must match [A-Za-z_][A-Za-z0-9_]*."
             )
-        if "\x00" in value:
+        if "\x00" in value:  # nosec CWE-158 -- detected and rejected on the next line
             raise ValueError(f"Environment variable '{key}' must not contain NUL bytes.")
         if "\n" in value or "\r" in value:
             raise ValueError(f"Environment variable '{key}' must not contain newline characters.")

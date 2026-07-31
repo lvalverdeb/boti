@@ -42,8 +42,8 @@ def _cmd_info(_args: argparse.Namespace) -> int:
         print(f"  Public API: {len(public_api)} symbols")
         for name in sorted(public_api):
             print(f"    - {name}")
-    except Exception:
-        print("  Public API: (unavailable)")
+    except Exception as exc:
+        print(f"  Public API: (unavailable: {exc})")
 
     return 0
 
