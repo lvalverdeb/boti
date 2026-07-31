@@ -14,6 +14,12 @@ from typing import Any
 _SECURE_FILE_MODE = 0o600
 
 
+# Must subclass RotatingFileHandler: RotatingFileHandler/FileHandler internals
+# (doRollover, __init__) call self._open() polymorphically and expect the
+# full Handler interface (baseFilename, mode, encoding, errors), so this
+# can't be a plain function or @dataclass — logging dispatches by
+# inheritance, not duck typing.
+# spaghetti-ignore[lazy-class]: see above
 class SafeRotatingFileHandler(RotatingFileHandler):
     """Rotating file handler that securely reopens log files on POSIX."""
 

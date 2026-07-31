@@ -31,6 +31,11 @@ from boti.core.project import ProjectService
 _LogExtra = dict[str, Any] | None
 
 
+# Must subclass logging.Formatter: handlers call self.format(record)
+# polymorphically via the base class's interface, so a plain function or
+# @dataclass can't stand in here — logging dispatches by inheritance, not duck
+# typing.
+# spaghetti-ignore[lazy-class]: see above
 class _ExtraFieldsFormatter(logging.Formatter):
     """Appends a ``key=value`` tail for any bound/``extra=`` fields on the record.
 
