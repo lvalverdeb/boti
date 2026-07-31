@@ -25,6 +25,15 @@ __all__ = ["LifecycleCore"]
 _module_log = logging.getLogger(__name__)
 
 
+# WMC is concentrated in the close/aclose barrier state machine (close,
+# aclose, _aclose_claim_barrier, _same_thread_close_is_reentrant,
+# _raise_if_barrier_wait_would_deadlock), which is one cohesive invariant
+# around _state_lock/_closing_thread/_closing_task/_closed_event, not several
+# bolted-together responsibilities. Splitting it to shave points off the WMC
+# score risks reintroducing the kind of thread/task-identity bug that
+# _acleanup()'s docstring already describes fixing once. Do not restructure
+# it to satisfy a linter threshold.
+# spaghetti-ignore[god-class]: see above
 class LifecycleCore:
     """
     Sync/async close barrier and context-manager protocol.
