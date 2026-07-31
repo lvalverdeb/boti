@@ -1,6 +1,6 @@
 [project]
 name = "boti"
-version = "1.0.8"
+version = "1.0.9"
 description = "Runtime primitives for reliable Python data pipelines, secure file access, and notebook-to-production workflows"
 readme = "README.md"
 license = "MIT"
