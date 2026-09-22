@@ -326,12 +326,14 @@ This is correct behaviour — allowing symlinks to implicitly widen the sandbox 
 
 ## 8. Test Coverage
 
-**File-level mapping (107 tests, all pass, ruff clean, mypy strict):**
+**File-level mapping (159 tests, all pass, ruff clean, mypy strict):**
 
 | Test file | What it covers |
 |-----------|----------------|
 | `test_logger.py` | Logger init, log levels, `bind()`, extras merging, stacklevel, log file creation, stderr fallback |
 | `test_lifecycle.py` | `ManagedResource` init, sync/async close, reentrancy, context managers, pickling, finalizer warning |
+| `test_lifecycle_pickle.py` | Pickle round-trip: instance state preserved, `LifecycleCore` locks/events stripped and rebuilt, closed state survives without re-running cleanup |
+| `test_agent.py` | `Agent` sync/async context, `aclose` fallback to sync cleanup, idempotent close, config rejection of unknown fields and overrides, logger injection and verbosity, GC finalizer, use-after-close |
 | `test_security.py` | `SecureResource` sandbox enforcement, path traversal rejection, extra_allowed_paths, env file loading |
 | `test_filesystem.py` | `FilesystemConfig` validation, SSRF endpoint blocking, `FilesystemAdapter` caching, `_normalize_s3_fsspec_options` |
 | `test_settings.py` | `load_prefixed_model`, `load_dotenv_values`, prefix validation, type coercion |
