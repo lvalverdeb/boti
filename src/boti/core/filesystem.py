@@ -5,6 +5,7 @@ Typed filesystem configuration and runtime adapters.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -14,7 +15,7 @@ from urllib.parse import urlparse
 
 import fsspec
 import pyarrow.fs as pafs
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from boti.core.filesystem_options import (
     _FSSPEC_OPTIONS_BUILDERS,
@@ -108,6 +109,86 @@ def _allowlist_endpoint_from_url(endpoint: str) -> None:
     add_endpoint_to_allowlist(allowlist_key, hostname)
 
 
+# fs_options keys that the option builders read as a storage endpoint.
+_ENDPOINT_OPTION_KEYS = ("endpoint_url", "endpoint_override", "endpoint")
+
+
+# Characters that make URL parsers disagree on where the host ends. ``urlparse``
+# reads ``http://127.0.0.1\@s3.amazonaws.com`` as host ``s3.amazonaws.com``, but
+# libcurl (pyarrow's S3 client) connects to ``127.0.0.1`` — so a hostname check
+# alone is bypassable unless these are refused up front.
+_URL_AMBIGUOUS_CHARS_RE = re.compile(r"[\\\s\x00-\x1f\x7f]")
+
+
+def _reject_ambiguous_url(url: str) -> None:
+    """Raise ValueError if different URL parsers could name different hosts for *url*."""
+    if _URL_AMBIGUOUS_CHARS_RE.search(url):
+        raise ValueError(
+            f"endpoint {url!r} contains a backslash, whitespace or control character, "
+            "which is rejected because URL parsers disagree on how to read it."
+        )
+    parsed = urlparse(url)
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            f"endpoint '{url}' must not contain a userinfo ('user:pass@') section; "
+            "pass credentials via fs_key/fs_secret/fs_token instead."
+        )
+
+
+def _reject_private_host(url: str) -> None:
+    """Raise ValueError if *url*'s host is private/reserved and not allowlisted.
+
+    *url* must carry an authority (``scheme://host`` or ``//host``). It is
+    first run through ``_reject_ambiguous_url`` so the host this function
+    checks is the host every downstream client will actually connect to.
+    """
+    url = url.strip()
+    _reject_ambiguous_url(url)
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+    allowlist_key = f"{hostname}:{parsed.port}" if parsed.port else hostname
+    if (
+        allowlist_key not in ENDPOINT_ALLOWLIST
+        and hostname not in ENDPOINT_ALLOWLIST
+        and _is_private_ip(hostname)
+    ):
+        raise ValueError(
+            f"endpoint '{url}' resolves to a private or reserved IP address "
+            f"({hostname}) which is blocked to prevent SSRF attacks. "
+            "Add the host to boti.core.filesystem.ENDPOINT_ALLOWLIST "
+            "if this is intentional."
+        )
+
+
+def _validate_endpoint_url(value: str) -> str:
+    """Require an http(s) scheme and a non-private host; return the stripped URL."""
+    stripped = value.strip()
+    scheme = urlparse(stripped).scheme
+    # Require an explicit http/https scheme to block file://, ftp://, etc.
+    if scheme not in {"http", "https"}:
+        raise ValueError(
+            f"endpoint scheme '{scheme}' is not allowed. "
+            "Only 'http' and 'https' endpoints are supported."
+        )
+    _reject_private_host(stripped)
+    return stripped
+
+
+def _validate_option_endpoint(value: str) -> None:
+    """SSRF-check an endpoint carried in ``fs_options``.
+
+    Unlike ``fs_endpoint``, these are commonly written as bare ``host:port``
+    (pyarrow's ``endpoint_override``, MinIO docs) and the option builders
+    supply the scheme, so a schemeless value is accepted and only its host is
+    checked. A value with a scheme must still be http(s).
+    """
+    stripped = value.strip()
+    if "://" in stripped:
+        _validate_endpoint_url(stripped)
+    else:
+        _reject_private_host(f"//{stripped}")
+
+
 class FilesystemConfig(BaseModel):
     """Typed configuration for local and remote filesystem profiles.
 
@@ -179,35 +260,27 @@ class FilesystemConfig(BaseModel):
     @field_validator("fs_endpoint")
     @classmethod
     def validate_fs_endpoint(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        stripped = value.strip()
-        parsed = urlparse(stripped)
+        return None if value is None else _validate_endpoint_url(value)
 
-        # Require an explicit http/https scheme to block file://, ftp://, etc.
-        if parsed.scheme not in {"http", "https"}:
-            raise ValueError(
-                f"fs_endpoint scheme '{parsed.scheme}' is not allowed. "
-                "Only 'http' and 'https' endpoints are supported."
-            )
+    @model_validator(mode="after")
+    def validate_endpoint_bearing_fields(self) -> FilesystemConfig:
+        """Apply the SSRF guard to every field that can redirect traffic.
 
-        hostname = parsed.hostname or ""
-        # Build the host:port key used for allowlist lookup
-        allowlist_key = f"{hostname}:{parsed.port}" if parsed.port else hostname
-
-        if (
-            allowlist_key not in ENDPOINT_ALLOWLIST
-            and hostname not in ENDPOINT_ALLOWLIST
-            and _is_private_ip(hostname)
-        ):
-            raise ValueError(
-                f"fs_endpoint '{stripped}' resolves to a private or reserved IP address "
-                f"({hostname}) which is blocked to prevent SSRF attacks. "
-                "Add the host to boti.core.filesystem.ENDPOINT_ALLOWLIST "
-                "if this is intentional."
-            )
-
-        return stripped
+        ``fs_endpoint`` is not the only way to point a backend at an internal
+        address: an http(s) ``fs_path`` is the target URL itself, and
+        ``fs_options`` can carry an endpoint that the option builders pass
+        through untouched.
+        """
+        if self.fs_type in {"http", "https"}:
+            _reject_private_host(self.fs_path)
+        client_kwargs = self.fs_options.get("client_kwargs")
+        candidates = [self.fs_options.get(key) for key in _ENDPOINT_OPTION_KEYS]
+        if isinstance(client_kwargs, dict):
+            candidates.append(client_kwargs.get("endpoint_url"))
+        for candidate in candidates:
+            if isinstance(candidate, str):
+                _validate_option_endpoint(candidate)
+        return self
 
     @field_validator("fs_type")
     @classmethod

@@ -18,6 +18,7 @@ import os
 import pytest
 
 from boti.core.filesystem import FilesystemAdapter, FilesystemConfig, create_filesystem
+from boti.core.filesystem_security import _is_private_ip
 
 # ---------------------------------------------------------------------------
 # FilesystemConfig validation
@@ -623,6 +624,123 @@ def test_filesystem_config_rejects_private_ip_endpoints(endpoint):
     """Private/reserved IP endpoints must be rejected to prevent SSRF."""
     with pytest.raises(ValueError, match="private or reserved IP"):
         FilesystemConfig(fs_type="s3", fs_path="my-bucket", fs_endpoint=endpoint)
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "::ffff:127.0.0.1",  # IPv4-mapped loopback
+        "::ffff:169.254.169.254",  # IPv4-mapped IMDS
+        "0.0.0.0",
+        "100.64.0.1",  # CGNAT
+        "fc00::1",  # IPv6 ULA
+        "fd00:ec2::254",  # AWS IMDS over IPv6
+        "localhost.",  # trailing dot
+        "metadata.google.internal.",
+        "app.localhost",
+        "127.1",  # legacy IPv4 spellings
+        "0x7f.0.0.1",
+        "2130706433",
+    ],
+)
+def test_is_private_ip_blocks_bypass_forms(host):
+    assert _is_private_ip(host)
+
+
+@pytest.mark.parametrize(
+    "host", ["s3.amazonaws.com", "8.8.8.8", "2606:4700::1111", "minio.internal"]
+)
+def test_is_private_ip_allows_public_hosts(host):
+    assert not _is_private_ip(host)
+
+
+@pytest.mark.parametrize(
+    "endpoint", ["http://[::ffff:7f00:1]:9000", "http://[fd00:ec2::254]", "http://localhost./"]
+)
+def test_filesystem_config_rejects_bypass_endpoints(endpoint):
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type="s3", fs_path="b", fs_endpoint=endpoint)
+
+
+@pytest.mark.parametrize("fs_type", ["http", "https"])
+def test_filesystem_config_rejects_private_http_fs_path(fs_type):
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type=fs_type, fs_path="http://169.254.169.254/latest/meta-data")
+
+
+def test_filesystem_config_accepts_public_http_fs_path():
+    config = FilesystemConfig(fs_type="http", fs_path="https://example.com/data")
+    assert config.fs_path == "https://example.com/data"
+
+
+@pytest.mark.parametrize(
+    "fs_options",
+    [
+        {"endpoint_url": "http://169.254.169.254"},
+        {"endpoint_override": "http://127.0.0.1:9000"},
+        {"client_kwargs": {"endpoint_url": "http://10.0.0.5"}},
+    ],
+)
+def test_filesystem_config_rejects_private_endpoint_in_fs_options(fs_options):
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type="s3", fs_path="b", fs_options=fs_options)
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://127.0.0.1:9000\\@s3.amazonaws.com",  # urlparse: amazonaws; libcurl: 127.0.0.1
+        "http://169.254.169.254 @s3.amazonaws.com",
+        "http://127.0.0.1\t@s3.amazonaws.com",
+        "http://s3.amazonaws.com@127.0.0.1",  # userinfo
+        "http://user:pw@s3.amazonaws.com",
+    ],
+)
+def test_filesystem_config_rejects_parser_differential_endpoints(endpoint):
+    """URLs that different parsers would route to different hosts are rejected outright."""
+    with pytest.raises(ValueError, match="backslash|userinfo|private or reserved"):
+        FilesystemConfig(fs_type="s3", fs_path="b", fs_endpoint=endpoint)
+
+
+@pytest.mark.parametrize(
+    "fs_options",
+    [
+        {"endpoint_override": "minio.local:9000"},  # schemeless host:port, pyarrow style
+        {"endpoint_url": "s3.example.com"},
+        {"client_kwargs": {"endpoint_url": "https://s3.example.com"}},
+    ],
+)
+def test_filesystem_config_accepts_schemeless_public_fs_options_endpoint(fs_options):
+    """Schemeless fs_options endpoints keep working; only the host is SSRF-checked."""
+    config = FilesystemConfig(fs_type="s3", fs_path="b", fs_options=fs_options)
+    assert config.fs_options == fs_options
+
+
+@pytest.mark.parametrize(
+    "fs_options",
+    [
+        {"endpoint_override": "127.0.0.1:9000"},
+        {"endpoint_url": "169.254.169.254"},
+        {"endpoint_override": "ftp://s3.example.com"},
+    ],
+)
+def test_filesystem_config_rejects_private_or_non_http_schemeless_fs_options(fs_options):
+    with pytest.raises(ValueError, match="private or reserved|scheme"):
+        FilesystemConfig(fs_type="s3", fs_path="b", fs_options=fs_options)
+
+
+def test_filesystem_config_allowlist_covers_fs_options_endpoint():
+    import boti.core.filesystem as fs_module
+
+    fs_module.ENDPOINT_ALLOWLIST.add("10.9.9.9")
+    try:
+        FilesystemConfig(
+            fs_type="s3",
+            fs_path="b",
+            fs_options={"client_kwargs": {"endpoint_url": "http://10.9.9.9"}},
+        )
+    finally:
+        fs_module.ENDPOINT_ALLOWLIST.discard("10.9.9.9")
 
 
 def test_filesystem_config_rejects_non_http_endpoint_scheme():
