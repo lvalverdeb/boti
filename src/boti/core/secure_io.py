@@ -40,7 +40,24 @@ class SecureResource(ManagedResource):
         root = self.config.project_root or ProjectService.detect_project_root()
         self.project_root = Path(root).resolve()
 
-        configured_allowed_paths: list[Path] = []
+        # super().__init__() has already attached the GC leak finalizer. If the
+        # sandbox config is rejected here, there is no live resource to leak, so
+        # detach it rather than let a half-built object warn when collected.
+        try:
+            configured_allowed_paths = self._resolve_extra_allowed_paths()
+        except Exception:
+            self._detach_finalizer()
+            raise
+        default_allowed_paths = [self.project_root, Path(tempfile.gettempdir()).resolve()]
+
+        self.allowed_paths: list[Path] = []
+        for candidate in [*default_allowed_paths, *configured_allowed_paths]:
+            if candidate not in self.allowed_paths:
+                self.allowed_paths.append(candidate)
+
+    def _resolve_extra_allowed_paths(self) -> list[Path]:
+        """Resolve ``config.extra_allowed_paths``, rejecting symlinked entries."""
+        resolved_paths: list[Path] = []
         for raw in self.config.extra_allowed_paths:
             unresolved = Path(raw)
             # Check for symlink BEFORE resolving — Path.resolve() follows symlinks
@@ -55,15 +72,10 @@ class SecureResource(ManagedResource):
                 warnings.warn(
                     f"extra_allowed_path does not exist and will have no effect: {raw!r}",
                     UserWarning,
-                    stacklevel=2,
+                    stacklevel=3,
                 )
-            configured_allowed_paths.append(resolved)
-        default_allowed_paths = [self.project_root, Path(tempfile.gettempdir()).resolve()]
-
-        self.allowed_paths: list[Path] = []
-        for candidate in [*default_allowed_paths, *configured_allowed_paths]:
-            if candidate not in self.allowed_paths:
-                self.allowed_paths.append(candidate)
+            resolved_paths.append(resolved)
+        return resolved_paths
 
     def get_secure_path(self, path: str | Path) -> Path:
         """
@@ -82,13 +94,18 @@ class SecureResource(ManagedResource):
                 are treated as untrusted input and denied rather than left to
                 bubble up as a raw OSError/ValueError.
         """
+        # The path goes in as a lazy %-arg, not interpolated into the format
+        # string: PIISecretFilter blanks any *message* that mentions a sensitive
+        # keyword, and the most common probe target is literally "/etc/passwd" —
+        # which would turn this alert into "[REDACTED SENSITIVE DATA]".
         try:
             resolved = Path(path).resolve()
         except (OSError, ValueError) as exc:
             if self.logger is not None:
                 self.logger.error(
-                    f"SECURITY VIOLATION: Path could not be resolved. "
-                    f"Target: {path!r}, Error: {exc}"
+                    "SECURITY VIOLATION: Path could not be resolved. Target: %r, Error: %s",
+                    path,
+                    exc,
                 )
             raise PermissionError(
                 f"Access denied: Path {path!r} could not be resolved ({exc})."
@@ -96,8 +113,11 @@ class SecureResource(ManagedResource):
         if not is_secure_path(resolved, self.allowed_paths):
             if self.logger is not None:
                 self.logger.error(
-                    f"SECURITY VIOLATION: Path traversal attempt detected. "
-                    f"Target: {path} (resolved: {resolved}), Allowed Roots: {self.allowed_paths}"
+                    "SECURITY VIOLATION: Path traversal attempt detected. "
+                    "Target: %s (resolved: %s), Allowed Roots: %s",
+                    path,
+                    resolved,
+                    self.allowed_paths,
                 )
             raise PermissionError(
                 f"Access denied: Path {path} is outside the configured sandbox roots."

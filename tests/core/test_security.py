@@ -2,6 +2,7 @@
 Tests for security and path sandboxing.
 """
 
+import logging
 import os
 import tempfile
 from pathlib import Path
@@ -88,13 +89,65 @@ def test_secure_resource_temp_allowed(temp_project_root):
         assert res.get_secure_path(tmp) == tmp
 
 
-def test_secure_resource_extra_allowed(temp_project_root):
+def test_secure_resource_extra_allowed(temp_project_root, tmp_path):
     """Verify that explicitly added paths are allowed."""
-    extra = Path("/tmp/sibi_extra_test").resolve()
-    # Mock existence if needed, but resolve() works regardless of existence
+    extra = (tmp_path / "sibi_extra_test").resolve()
+    extra.mkdir()
     config = ResourceConfig(project_root=temp_project_root, extra_allowed_paths=[extra])
     with SecureResource(config=config) as res:
         assert res.get_secure_path(extra) == extra
+
+
+def test_secure_resource_rejected_config_does_not_warn_on_gc(temp_project_root, tmp_path):
+    """A constructor that rejects its sandbox config must not leave a GC leak finalizer
+    behind — there was never a live resource to leak."""
+    import gc
+    import warnings
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(outside, target_is_directory=True)
+    config = ResourceConfig(
+        project_root=temp_project_root, extra_allowed_paths=[link], skip_logger=True
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="symlink"):
+            SecureResource(config=config)
+        gc.collect()
+
+    assert not [w for w in caught if "garbage collected" in str(w.message)]
+
+
+def test_secure_resource_violation_log_keeps_path_despite_pii_filter(temp_project_root):
+    """The traversal alert must still name the target even when it is /etc/passwd —
+    'passwd' is a PII keyword and would blank an interpolated message."""
+    from boti.core.logger_filters import PIISecretFilter
+
+    seen: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            seen.append(record)
+
+    core = logging.getLogger("test.secure.violation")
+    core.setLevel(logging.ERROR)
+    handler = _Capture()
+    handler.addFilter(PIISecretFilter())
+    core.addHandler(handler)
+    try:
+        config = ResourceConfig(project_root=temp_project_root, logger=core)
+        with SecureResource(config=config) as res, pytest.raises(PermissionError):
+            res.get_secure_path("/etc/passwd")
+    finally:
+        core.removeHandler(handler)
+
+    assert len(seen) == 1
+    rendered = seen[0].getMessage()
+    assert "SECURITY VIOLATION" in rendered
+    assert "/etc/passwd" in rendered
 
 
 def test_setup_environment_loads_in_project_env_file(monkeypatch, temp_project_root):
