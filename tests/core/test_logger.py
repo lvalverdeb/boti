@@ -428,3 +428,45 @@ def test_pii_secret_filter_scrubs_preformatted_exc_text():
     assert PIISecretFilter().filter(record)
     assert "abc123" not in record.exc_text
 
+
+class _RecordCapture(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+def test_logger_stacklevel_attributes_records_to_the_caller(temp_log_dir):
+    """``_CALLER_STACKLEVEL`` must skip Logger's own frames so filename/funcName
+    point at user code — on both the plain path and the LoggerAdapter (extras) path."""
+    logger = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="stack_test", log_file="s"))
+    capture = _RecordCapture()
+    logger.core.addHandler(capture)
+    try:
+        logger.info("plain")
+        logger.bind(run="r1").info("with extras")
+    finally:
+        logger.core.removeHandler(capture)
+
+    assert [r.getMessage() for r in capture.records] == ["plain", "with extras"]
+    for record in capture.records:
+        assert record.filename == os.path.basename(__file__)
+        assert record.funcName == "test_logger_stacklevel_attributes_records_to_the_caller"
+
+
+def test_logger_falls_back_to_stderr_when_log_dir_cannot_be_created(tmp_path, capsys):
+    """An uncreatable log_dir must not abort logger init: it warns and routes to stderr."""
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("")
+    log_dir = blocker / "logs"  # mkdir -> NotADirectoryError (an OSError)
+
+    with pytest.warns(RuntimeWarning, match="Falling back to stderr"):
+        logger = Logger(LoggerConfig(log_dir=log_dir, logger_name="stderr_test", log_file="x"))
+
+    logger.warning("went to stderr")
+    time.sleep(0.5)
+
+    assert not log_dir.exists()
+    assert "went to stderr" in capsys.readouterr().err
