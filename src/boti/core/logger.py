@@ -14,7 +14,6 @@ import os
 import sys
 import threading
 import warnings
-from collections import OrderedDict
 from logging.handlers import QueueHandler
 from pathlib import Path
 from typing import Any
@@ -73,11 +72,14 @@ class Logger:
     """
 
     DEFAULT_LOGGER_NAME = "boti"
-    # Bounded LRU cache: key = (log_dir, logger_name, log_file, log_level).
-    # Including log_level prevents a cached instance silently ignoring level changes.
-    # Capped at 256 entries to avoid unbounded file-descriptor growth in long-running apps.
-    _MAX_CACHE_SIZE = 256
-    _default_logger_cache: OrderedDict[tuple[Path, str, str, int], Logger] = OrderedDict()
+    # default_logger() registry: key = (log_dir, logger_name, log_file).
+    # One Logger per destination set, mirroring the stdlib's own per-name
+    # registry; it is unbounded by design and entries are released only by
+    # Logger.close(). Level is deliberately *not* part of the key: all Loggers
+    # with one name share one stdlib logging.Logger, so two cached objects
+    # could never have had independent levels — the latest requested level is
+    # applied to the single shared instance instead.
+    _default_logger_cache: dict[tuple[Path, str, str], Logger] = {}
     _default_logger_lock = threading.RLock()
 
     # Log directory: owner read/write/execute only, no group/other access.
@@ -137,16 +139,11 @@ class Logger:
 
         resolved_log_dir = cls._resolve_log_dir(log_dir, base_dir=base_dir)
         effective_log_file = log_file or logger_name
-        # log_level is part of the key so two callers requesting different levels
-        # get distinct instances rather than the second silently overriding the first.
-        cache_key = (resolved_log_dir, logger_name, effective_log_file, log_level)
+        cache_key = (resolved_log_dir, logger_name, effective_log_file)
 
         with cls._default_logger_lock:
             logger = cls._default_logger_cache.get(cache_key)
             if logger is None:
-                if len(cls._default_logger_cache) >= cls._MAX_CACHE_SIZE:
-                    # Evict the least-recently-used entry (first in insertion order).
-                    cls._default_logger_cache.popitem(last=False)
                 config = LoggerConfig(
                     log_dir=resolved_log_dir,
                     logger_name=logger_name,
@@ -155,9 +152,8 @@ class Logger:
                 )
                 logger = cls(config)
                 cls._default_logger_cache[cache_key] = logger
-            else:
-                # Move to end to mark as most-recently-used.
-                cls._default_logger_cache.move_to_end(cache_key)
+            elif logger.log_level != log_level:
+                logger.set_level(log_level)
             return logger
 
     @classmethod
@@ -208,8 +204,36 @@ class Logger:
     # property above.
     # spaghetti-ignore[pass-through-method]: see above
     def set_level(self, level: int) -> None:
-        """Update the logging level."""
+        """Update the logging level.
+
+        The level belongs to the underlying stdlib logger, which every
+        ``Logger`` (and ``bind()`` clone) with this name shares.
+        """
+        self.log_level = level
         self._core.setLevel(level)
+
+    def close(self) -> None:
+        """Release this logger's runtime resources.
+
+        Detaches the queue handler from the stdlib logger, closes every
+        destination registered under this logger's name (file handles
+        included), and drops the ``default_logger()`` registry entry so a
+        later ``default_logger()`` call with the same arguments builds a fresh
+        one. Records for this name still waiting in the queue are discarded.
+        Idempotent. ``bind()`` clones share the same name and are closed too.
+
+        Only needed by applications that create many short-lived named
+        loggers; long-lived loggers can be left to interpreter shutdown.
+        """
+        with LoggerRuntime.lock:
+            for handler in list(self._core.handlers):
+                if isinstance(handler, QueueHandler):
+                    self._core.removeHandler(handler)
+            LoggerRuntime.remove_destinations(self.logger_name)
+        with Logger._default_logger_lock:
+            for key, cached in list(Logger._default_logger_cache.items()):
+                if cached is self:
+                    del Logger._default_logger_cache[key]
 
     def _log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         extra: _LogExtra = kwargs.pop("extra", None)

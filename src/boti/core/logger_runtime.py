@@ -9,21 +9,51 @@ from logging.handlers import QueueListener
 from queue import Queue
 
 
-# Must subclass logging.Filter: Handler.addFilter accepts callables too, but
-# mypy can't type a lambda here and a named class documents the intent.
+# Must subclass QueueListener: the stdlib's _monitor thread calls
+# self.handle(record) polymorphically, so dispatch can only be changed by
+# overriding it here.
 # spaghetti-ignore[lazy-class]: see above
-class _ExactNameFilter(logging.Filter):
-    """Pass only records from the logger named exactly *name* — not its children."""
+class _NamedDispatchListener(QueueListener):
+    """QueueListener that routes each record to the handlers registered for
+    exactly ``record.name``.
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        return record.name == self.name
+    The stdlib listener offers every record to every handler, so cost grows
+    with the number of loggers in the process and each handler needs its own
+    name filter. Keying destinations by logger name makes dispatch a dict
+    lookup and makes exact-name routing structural: a child logger's records
+    cannot reach its parent's destinations because they are never looked up.
+    """
+
+    def __init__(
+        self,
+        queue: Queue[logging.LogRecord],
+        destinations: dict[str, list[logging.Handler]],
+        lock: threading.RLock,
+    ) -> None:
+        super().__init__(queue, respect_handler_level=True)
+        self._destinations = destinations
+        self._lock = lock
+
+    def handle(self, record: logging.LogRecord) -> None:
+        record = self.prepare(record)
+        with self._lock:
+            handlers = tuple(self._destinations.get(record.name, ()))
+        for handler in handlers:
+            if record.levelno >= handler.level:
+                handler.handle(record)
 
 
 class LoggerRuntime:
-    """Global queue/listener state shared by all Logger instances."""
+    """Global queue/listener state shared by all Logger instances.
+
+    Destinations live here, keyed by logger name, not on the listener: the
+    listener can be stopped and restarted (``stop_listener()`` /
+    ``ensure_listener()``) without losing them.
+    """
 
     lock = threading.RLock()
     _attached_keys: set[tuple[str, str]] = set()
+    _destinations: dict[str, list[logging.Handler]] = {}
     _log_queue: Queue[logging.LogRecord] | None = None
     _listener: QueueListener | None = None
     _atexit_registered: bool = False
@@ -40,7 +70,7 @@ class LoggerRuntime:
             if cls._listener is not None:
                 return
             queue = cls.ensure_queue()
-            cls._listener = QueueListener(queue, respect_handler_level=True)
+            cls._listener = _NamedDispatchListener(queue, cls._destinations, cls.lock)
             cls._listener.start()
             if not cls._atexit_registered:
                 atexit.register(cls.stop_listener)
@@ -53,6 +83,11 @@ class LoggerRuntime:
         handler: logging.Handler,
         formatter: logging.Formatter,
     ) -> None:
+        """Register *handler* for records from the logger named ``key[0]``.
+
+        ``key[1]`` identifies the destination (a file path or a sentinel such
+        as ``"__console__"``) so the same destination is not attached twice.
+        """
         with cls.lock:
             if key in cls._attached_keys:
                 return
@@ -63,18 +98,32 @@ class LoggerRuntime:
                 )
 
             logger_name, _ = key
-            # Exact-name match only. A plain ``logging.Filter(name=...)`` also
-            # accepts child loggers (``app`` matches ``app.child``), which would
-            # send a child's records to its parent's file and console as well
-            # as its own — a duplicate console line per ancestor.
-            handler.addFilter(_ExactNameFilter(logger_name))
             handler.setFormatter(formatter)
-            cls._listener.handlers = cls._listener.handlers + (handler,)
+            cls._destinations.setdefault(logger_name, []).append(handler)
             cls._attached_keys.add(key)
 
     @classmethod
+    def remove_destinations(cls, logger_name: str) -> int:
+        """Detach and close every destination registered for *logger_name*.
+
+        Records for that name still waiting in the queue are discarded. Returns
+        the number of handlers closed.
+        """
+        with cls.lock:
+            handlers = cls._destinations.pop(logger_name, [])
+            cls._attached_keys = {k for k in cls._attached_keys if k[0] != logger_name}
+        # Close outside the lock: a file handler's close() may flush to disk.
+        for handler in handlers:
+            handler.close()
+        return len(handlers)
+
+    @classmethod
     def stop_listener(cls) -> None:
-        """Stop the background listener.  Safe to call multiple times."""
+        """Stop the background listener.  Safe to call multiple times.
+
+        Destinations are kept, so a later ``ensure_listener()`` resumes
+        delivery to the same files and streams.
+        """
         with cls.lock:
             if cls._listener is None:
                 return

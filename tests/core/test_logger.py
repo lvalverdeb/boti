@@ -470,3 +470,81 @@ def test_logger_falls_back_to_stderr_when_log_dir_cannot_be_created(tmp_path, ca
 
     assert not log_dir.exists()
     assert "went to stderr" in capsys.readouterr().err
+
+
+def test_default_logger_same_name_different_level_returns_shared_instance(temp_log_dir):
+    """All Loggers with one name share one stdlib logger, so level cannot be
+    per-object. default_logger() returns the one instance and applies the
+    latest requested level to it, rather than handing back a second object
+    that silently shares (and clobbers) the first's level."""
+    first = Logger.default_logger(log_dir=temp_log_dir, logger_name="lvl", log_level=logging.DEBUG)
+    second = Logger.default_logger(log_dir=temp_log_dir, logger_name="lvl", log_level=logging.ERROR)
+
+    assert first is second
+    assert first.log_level == logging.ERROR
+    assert first.core.level == logging.ERROR
+
+
+def test_logger_close_releases_destinations_queue_handler_and_cache_entry(temp_log_dir):
+    from logging.handlers import QueueHandler
+
+    from boti.core.logger_runtime import LoggerRuntime
+
+    logger = Logger.default_logger(log_dir=temp_log_dir, logger_name="closeme")
+    logger.warning("before close")
+    time.sleep(0.3)
+    log_file = temp_log_dir / "closeme.log"
+    assert "before close" in log_file.read_text()
+    file_handlers = [
+        h for h in LoggerRuntime._destinations["closeme"] if isinstance(h, SafeRotatingFileHandler)
+    ]
+    assert len(file_handlers) == 1 and file_handlers[0].stream is not None
+
+    logger.close()
+    logger.close()  # idempotent
+
+    assert "closeme" not in LoggerRuntime._destinations
+    assert not any(k[0] == "closeme" for k in LoggerRuntime._attached_keys)
+    assert not any(isinstance(h, QueueHandler) for h in logger.core.handlers)
+    assert file_handlers[0].stream is None  # file handle closed
+    assert logger not in Logger._default_logger_cache.values()
+
+    # A fresh default_logger() with the same arguments rebuilds a working logger.
+    reborn = Logger.default_logger(log_dir=temp_log_dir, logger_name="closeme")
+    assert reborn is not logger
+    reborn.warning("after rebuild")
+    time.sleep(0.3)
+    assert "after rebuild" in log_file.read_text()
+
+
+def test_logger_runtime_destinations_survive_listener_restart(temp_log_dir):
+    """stop_listener()/ensure_listener() must not strand loggers created before
+    the stop: destinations live in the registry, not on the dead listener."""
+    from boti.core.logger_runtime import LoggerRuntime
+
+    survivor = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="survivor", log_file="s"))
+    LoggerRuntime.stop_listener()
+    # Creating any logger restarts the listener.
+    Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="restarter", log_file="r"))
+
+    survivor.warning("after restart")
+    time.sleep(0.3)
+    assert "after restart" in (temp_log_dir / "s.log").read_text()
+
+
+def test_logger_runtime_registry_and_destinations_stay_consistent(temp_log_dir):
+    """No hidden cap: N distinct loggers → N registry entries and 2N destinations
+    (file + console), and closing them all releases every one."""
+    from boti.core.logger_runtime import LoggerRuntime
+
+    names = [f"bulk{i}" for i in range(40)]
+    loggers = [Logger.default_logger(log_dir=temp_log_dir, logger_name=n) for n in names]
+    assert all(n in LoggerRuntime._destinations for n in names)
+    assert sum(len(LoggerRuntime._destinations[n]) for n in names) == 2 * len(names)
+    assert all(lg in Logger._default_logger_cache.values() for lg in loggers)
+
+    for lg in loggers:
+        lg.close()
+
+    assert not any(n in LoggerRuntime._destinations for n in names)
+    assert not any(lg in Logger._default_logger_cache.values() for lg in loggers)

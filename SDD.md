@@ -199,8 +199,9 @@ User code              Logger               QueueHandler        QueueListener
 - **`_log` as single dispatch point** — all 5 log methods (`debug`/`info`/`warning`/`error`/`critical`) delegate to `_log`, which handles `extra` merging, `stacklevel` correction, and `LoggerAdapter` wrapping in one place. Eliminates duplication and ensures consistent behaviour.
 - **`copy.copy(self)` in `bind()`** — preserves the full `Logger` protocol (`.set_level()`, `.bind()`, all log methods) instead of returning a `LoggerAdapter` with a narrower interface. Pythonic: prefer the object that supports all operations over one that requires the caller to know what's missing.
 - **`self._extra` dict** — bound context stored directly on the instance rather than through the stdlib's `LoggerAdapter` proxy. Merged with per-call `extra` in `_log`. Zero overhead when no extras exist.
-- **`LoggerRuntime` as global dispatch centre** — single `QueueListener` shared by all `Logger` instances. Destinations are added by key `(logger_name, path | "__console__")` to prevent duplicates, and each destination is filtered on the **exact** logger name — not stdlib's `logging.Filter(name=…)`, which also matches child loggers and would send `app.child`'s records to `app`'s file and console too. `atexit` registration ensures flush on shutdown.
-- **Known limitation — shared stdlib core.** Two `Logger`s with the same `logger_name` wrap the same `logging.getLogger(name)`; the second's `set_level()` changes the first. The `default_logger()` cache keys on level, so it hands back two *objects*, but they share one level. Evicting a cached `Logger` does not detach its handlers or destinations.
+- **`LoggerRuntime` as global dispatch centre** — single `QueueListener` shared by all `Logger` instances. Destinations live in a registry **keyed by logger name**, not on the listener: dispatch is a dict lookup per record (not a scan of every handler in the process), exact-name routing is structural (a child logger's records are never looked up under the parent's name, so `app.child` cannot reach `app`'s file or console), and `stop_listener()`/`ensure_listener()` cycles keep every destination. `(logger_name, path | "__console__")` keys prevent attaching the same destination twice. `atexit` registration ensures flush on shutdown.
+- **One stdlib logger per name, one level per name.** Every `Logger` (and `bind()` clone) with a given `logger_name` wraps the same `logging.getLogger(name)`, so level is a property of the name. `default_logger()` keys its registry on `(log_dir, logger_name, log_file)` — deliberately *not* level — and returns the one instance, applying the latest requested level to it. Two objects with independent levels for one name were never possible; the registry no longer pretends otherwise.
+- **Explicit release, no hidden cap.** The `default_logger()` registry is unbounded by design, mirroring the stdlib's own per-name registry: one `Logger` per destination set. `Logger.close()` detaches the queue handler, closes the name's destinations (file handles included), and drops the registry entry; a later `default_logger()` with the same arguments rebuilds a fresh one. Only applications that create many short-lived named loggers need it.
 
 ```python
 # Pythonic: contextual logging with bound extra data.
@@ -389,14 +390,14 @@ This is correct behaviour — allowing symlinks to implicitly widen the sandbox 
 
 ## 8. Test Coverage
 
-**File-level mapping (207 tests, all pass, ruff clean, mypy strict):**
+**File-level mapping (211 tests, all pass, ruff clean, mypy strict):**
 
 | Test file | Tests | What it covers |
 |-----------|------:|----------------|
 | `test_filesystem.py` | 91 | `FilesystemConfig` validation, SSRF guard (private/reserved/mapped/legacy IPs, hostnames, parser-differential URLs, `fs_path` and `fs_options` routes, allowlist), `FilesystemAdapter` caching/retry, `_normalize_s3_fsspec_options`, pyarrow kwargs |
 | `test_lifecycle.py` | 36 | `ManagedResource` init, sync/async close barrier, reentrancy across threads and tasks, context managers, pickling, finalizer warning |
 | `test_security.py` | 30 | `SecureResource` sandbox enforcement, traversal rejection, `extra_allowed_paths` (incl. symlink rejection without a phantom GC warning), violation log survives PII filter, env-file loading, `security.py` validators |
-| `test_logger.py` | 27 | Logger init, levels, `bind()`, extras merging and text rendering, stacklevel attribution (plain and adapter paths), PII redaction (msg/args/extra/`exc_info`, cycles), multi-handler `asctime` isolation, exact-name destination routing, log-file hardening (permissions, symlink TOCTOU), stderr fallback |
+| `test_logger.py` | 31 | Logger init, levels, `bind()`, extras merging and text rendering, stacklevel attribution (plain and adapter paths), PII redaction (msg/args/extra/`exc_info`, cycles), multi-handler `asctime` isolation, exact-name destination routing, shared-level registry, `close()` release, listener restart, log-file hardening (permissions, symlink TOCTOU), stderr fallback |
 | `test_agent.py` | 11 | `Agent` sync/async context, `aclose` fallback to sync cleanup, idempotent close, config rejection, logger injection and verbosity, GC finalizer, use-after-close |
 | `test_lifecycle_pickle.py` | 5 | `PicklableLifecycleCoreMixin` round-trip: state preserved, locks/events rebuilt, closed state survives without re-running cleanup |
 | `test_top_level_api.py` | 4 | `boti.*` facade resolves the 5 curated names; `import boti` does **not** load `boti.core` (checked in a fresh interpreter); `boti.core` attribute resolves lazily; unknown names raise `AttributeError` |
