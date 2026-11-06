@@ -13,6 +13,7 @@ from boti.core import Logger
 from boti.core import logger as logger_module
 from boti.core.logger import PIISecretFilter
 from boti.core.logger_handlers import SafeRotatingFileHandler
+from boti.core.logger_runtime import LoggerRuntime
 from boti.core.models import LoggerConfig
 
 
@@ -603,3 +604,24 @@ def test_raw_stdlib_logger_destinations_still_route_by_name(tmp_path):
     finally:
         raw.handlers.clear()
         LoggerRuntime.remove_destinations(("raw_app", ""), {("raw_app", str(path))})
+
+
+def test_closed_file_handler_drops_records_still_in_flight(temp_log_dir):
+    """Logger.close() closes the file handler outside the listener lock, so the
+    listener may already hold that handler for an in-flight record. The stdlib
+    FileHandler.emit would re-open the file in append mode; ours must not."""
+    config = LoggerConfig(log_dir=temp_log_dir, logger_name="late", log_file="late")
+    logger = Logger(config)
+    handlers = LoggerRuntime._destinations[logger._sink]
+    file_handler = next(h for h in handlers if isinstance(h, SafeRotatingFileHandler))
+    log_path = temp_log_dir / "late.log"
+    logger.info("before close")
+    LoggerRuntime.stop_listener()
+    before = log_path.read_bytes()
+
+    logger.close()
+    late = logging.LogRecord("late", logging.INFO, __file__, 1, "after close", None, None)
+    file_handler.handle(late)
+
+    assert file_handler.stream is None
+    assert log_path.read_bytes() == before

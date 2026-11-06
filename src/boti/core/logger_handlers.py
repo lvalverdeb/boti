@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import stat
 
@@ -21,7 +22,24 @@ _SECURE_FILE_MODE = 0o600
 # inheritance, not duck typing.
 # spaghetti-ignore[lazy-class]: see above
 class SafeRotatingFileHandler(RotatingFileHandler):
-    """Rotating file handler that securely reopens log files on POSIX."""
+    """Rotating file handler that securely reopens log files on POSIX.
+
+    Also stays closed: the stdlib ``FileHandler.emit`` re-opens the file when
+    ``stream`` is ``None`` and the mode is append, so a record still in flight
+    on the listener thread when ``Logger.close()`` ran would re-create the
+    file and leak the descriptor. After ``close()`` records are dropped.
+    """
+
+    _released = False
+
+    def close(self) -> None:
+        self._released = True
+        super().close()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if self._released:
+            return
+        super().emit(record)
 
     def _open(self) -> Any:
         if os.name != "posix" or not hasattr(os, "O_NOFOLLOW"):
