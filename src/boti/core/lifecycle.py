@@ -360,6 +360,7 @@ class LifecycleCore:
         self._assert_open()
         return self
 
+    @final
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         # Same rationale as __exit__: preserve the original exception.
         await self.aclose(suppress_errors=exc_type is not None)
