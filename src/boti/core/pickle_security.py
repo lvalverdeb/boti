@@ -4,8 +4,14 @@ Pickle-security gating for Boti resources.
 Provides ``PickleSecurityMixin``, a composable mixin that guards a
 resource's pickling behind an explicit opt-in (``config.allow_pickle``) and
 gates unpickling behind ``BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`` or
-``trusted_unpickle_scope()``, since deserializing an untrusted payload can
-execute attacker-controlled code.
+``trusted_unpickle_scope()``.
+
+The gate is an acknowledgement, not a sanitiser: it makes accidental
+unpickling fail, so a resource cannot be deserialised in a process that never
+meant to accept pickles. It inspects nothing — ``pickle`` runs the payload's
+``__reduce__`` before any class-level hook here can see it — so unpickling a
+payload from an untrusted source remains arbitrary code execution even with
+the gate open. Only enable it where every producer is trusted.
 """
 
 from __future__ import annotations
@@ -34,8 +40,10 @@ class PickleSecurityMixin:
 
     Requires ``config.allow_pickle`` to serialize, and requires
     ``BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE`` or ``trusted_unpickle_scope()``
-    to deserialize, since unpickling an untrusted payload can execute
-    attacker-controlled code via ``__reduce__``/``__setstate__``.
+    to deserialize. The deserialize gate stops a process from unpickling a
+    resource by accident; it does not make a hostile payload safe —
+    ``__reduce__`` runs before ``__setstate__`` is reached, so the trust
+    decision has to be made about the payload's source, not here.
     """
 
     _TRUSTED_UNPICKLE_ENV = "BOTI_ALLOW_TRUSTED_RESOURCE_UNPICKLE"
