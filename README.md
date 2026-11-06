@@ -66,7 +66,8 @@ When multiple internal packages or teams depend on the same transformation logic
 ### Core package
 
 ```bash
-pip install boti
+pip install boti        # core: fsspec, pyarrow, pydantic
+pip install "boti[s3]"  # adds s3fs for fs_type="s3"
 ```
 
 Core imports:

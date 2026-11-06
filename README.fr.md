@@ -66,7 +66,8 @@ Lorsque plusieurs paquets internes ou équipes dépendent de la même logique de
 ### Paquet principal
 
 ```bash
-pip install boti
+pip install boti        # noyau : fsspec, pyarrow, pydantic
+pip install "boti[s3]"  # ajoute s3fs pour fs_type="s3"
 ```
 
 Importations principales :

@@ -1,6 +1,6 @@
 [project]
 name = "boti"
-version = "1.0.11"
+version = "1.1.0"
 description = "Runtime primitives for reliable Python data pipelines, secure file access, and notebook-to-production workflows"
 readme = "README.md"
 license = "MIT"
@@ -22,12 +22,15 @@ classifiers = [
 ]
 dependencies = [
     "fsspec>=2026.3.0,<2027.0.0",
-    "ipykernel>=7.2.0,<8.0.0",
     "pyarrow>=23.0.1,<24.0.0",
     "pydantic>=2.12.5,<3.0.0",
     "pydantic-settings>=2.13.1,<3.0.0",
-    "s3fs>=2026.3.0,<2027.0.0",
 ]
+
+[project.optional-dependencies]
+# fsspec loads the s3fs backend only when fs_type="s3"/"s3a" is used;
+# keep it opt-in so core installs don't pull aiobotocore/botocore.
+s3 = ["s3fs>=2026.3.0,<2027.0.0"]
 
 [project.urls]
 Homepage = "https://github.com/lvalverdeb/boti"
@@ -49,6 +52,8 @@ dev = [
     "pytest-cov>=6.0.0,<8.0.0",
     "ruff>=0.11.0,<0.16.0",
     "mypy>=1.14.0,<2.0.0",
+    # examples/filesystem_supported_backends.py instantiates a real S3FileSystem
+    "s3fs>=2026.3.0,<2027.0.0",
 ]
 
 [tool.setuptools]

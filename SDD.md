@@ -260,6 +260,8 @@ What "host checked" means:
 - **Reserved hostnames** (`localhost`, `*.localhost`, `metadata.google.internal`, …) are blocked with or without a trailing dot.
 - **Operator allowlist** — `add_endpoint_to_allowlist("host[:port]")` or `from_env_prefix(..., trust_env_endpoint=True)` exempts a host. `ENDPOINT_ALLOWLIST` is a process-wide mutable set; populate it at startup, before the first config is built.
 
+**Dependencies:** `fsspec`, `pyarrow` (imported at module load by `filesystem.py`), `pydantic`, `pydantic-settings`. The `s3fs` backend is an optional extra (`pip install "boti[s3]"`): fsspec loads it only when `fs_type` is `s3`/`s3a`, and a core install should not pull aiobotocore/botocore.
+
 **Key decision: no DNS resolution in validation.** Checking whether a hostname resolves to a private IP is avoided intentionally — DNS lookups during config validation would add latency, fail unreliably in offline environments, and create a side channel. Blocking well-known hostnames statically covers the common attack vectors; DNS rebinding attacks are the operator's responsibility via network egress controls.
 
 ### 4.2 Retry Adapter — `FilesystemAdapter`

@@ -66,7 +66,8 @@ Cuando múltiples paquetes internos o equipos dependen de la misma lógica de tr
 ### Paquete principal
 
 ```bash
-pip install boti
+pip install boti        # núcleo: fsspec, pyarrow, pydantic
+pip install "boti[s3]"  # añade s3fs para fs_type="s3"
 ```
 
 Importaciones principales:
