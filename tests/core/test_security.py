@@ -4,6 +4,7 @@ Tests for security and path sandboxing.
 
 import logging
 import os
+import stat
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -433,6 +434,28 @@ def test_detect_project_root_still_falls_back_with_warning(monkeypatch, tmp_path
         assert ProjectService.detect_project_root() == plain.resolve()
 
 
+def test_secure_resource_refuses_to_sandbox_a_guessed_root(monkeypatch, tmp_path):
+    """No project_root and no marker: the sandbox must not silently become cwd
+    or $HOME. The half-built object must not leave a GC leak warning either."""
+    import gc
+    import warnings
+
+    _markerless_cwd(monkeypatch, tmp_path)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(ValueError, match="could not detect a project root"):
+            SecureResource(config=ResourceConfig(skip_logger=True))
+        gc.collect()
+    assert not [w for w in caught if "garbage collected" in str(w.message)]
+
+
+def test_secure_resource_uses_detected_marker_root(monkeypatch, tmp_path):
+    plain = _markerless_cwd(monkeypatch, tmp_path)
+    (plain.parent / ".git").mkdir()
+    with SecureResource(config=ResourceConfig(skip_logger=True)) as res:
+        assert res.project_root == plain.parent.resolve()
+
+
 def test_src_boti_is_no_longer_a_root_marker(tmp_path):
     fake = tmp_path / "somewhere"
     (fake / "src" / "boti").mkdir(parents=True)
@@ -470,3 +493,90 @@ def test_stack_walk_does_not_read_source_context(monkeypatch, temp_project_root)
     monkeypatch.setattr(project_module.inspect, "stack", fake_stack)
     ProjectService.detect_project_root()
     assert seen == [0]
+
+
+# ---------------------------------------------------------------------------
+# open_secure: modes, and a symlink appearing after validation
+# ---------------------------------------------------------------------------
+
+
+class TestOpenSecure:
+    def _res(self, root):
+        return SecureResource(config=ResourceConfig(project_root=root, skip_logger=True))
+
+    def test_text_round_trip_through_modes(self, temp_project_root):
+        target = temp_project_root / "nested" / "f.txt"
+        target.parent.mkdir()
+        with self._res(temp_project_root) as res:
+            with res.open_secure(target, "w") as fh:
+                fh.write("one\n")
+            with res.open_secure(target, "a") as fh:
+                fh.write("two\n")
+            with res.open_secure(target) as fh:
+                assert fh.read() == "one\ntwo\n"
+            with res.open_secure(target, "rb") as fh:
+                assert fh.read() == b"one\ntwo\n"
+            with res.open_secure(target, "r+") as fh:
+                fh.seek(0)
+                fh.write("ONE")
+            assert target.read_text() == "ONE\ntwo\n"
+            assert res.read_text_secure(target) == "ONE\ntwo\n"
+            res.write_text_secure(target, "fresh")
+            assert target.read_text() == "fresh"
+
+    def test_exclusive_create_and_missing_file_keep_stdlib_errors(self, temp_project_root):
+        existing = temp_project_root / "exists.txt"
+        existing.write_text("x")
+        with self._res(temp_project_root) as res:
+            with pytest.raises(FileExistsError):
+                res.open_secure(existing, "x")
+            with pytest.raises(FileNotFoundError):
+                res.open_secure(temp_project_root / "missing.txt")
+            with pytest.raises(IsADirectoryError):
+                res.open_secure(temp_project_root)
+            with pytest.raises(ValueError, match="invalid mode"):
+                res.open_secure(existing, "rw")
+
+    def test_created_file_mode_matches_open(self, temp_project_root):
+        target = temp_project_root / "perm.txt"
+        with self._res(temp_project_root) as res, res.open_secure(target, "w") as fh:
+            fh.write("x")
+        expected = 0o666 & ~_current_umask()
+        assert stat.S_IMODE(target.stat().st_mode) == expected
+
+    @pytest.mark.skipif(not secure_io_module._OPEN_BENEATH_SUPPORTED, reason="needs openat()")
+    def test_symlink_planted_after_validation_is_refused(self, temp_project_root, monkeypatch):
+        """TOCTOU: the path validated by get_secure_path() is then opened via a
+        NOFOLLOW walk, so a component swapped for a symlink in between is
+        refused rather than followed. Simulated by handing open_secure a
+        validated path whose directory is already a symlink."""
+        root = temp_project_root.resolve()
+        outside = root.parent / "outside_for_toctou"
+        outside.mkdir(exist_ok=True)
+        (outside / "secret.txt").write_text("TOP SECRET")
+        link = root / "data"
+        link.symlink_to(outside, target_is_directory=True)
+        swapped = link / "secret.txt"
+        with self._res(root) as res:
+            monkeypatch.setattr(res, "_secure_path_and_root", lambda _p: (swapped, root))
+            with pytest.raises(PermissionError, match="changed to a symlink"):
+                res.open_secure(swapped)
+
+    @pytest.mark.skipif(not secure_io_module._OPEN_BENEATH_SUPPORTED, reason="needs openat()")
+    def test_symlink_as_final_component_is_refused_on_write(self, temp_project_root, monkeypatch):
+        root = temp_project_root.resolve()
+        outside = root.parent / "outside_target.txt"
+        outside.write_text("untouched")
+        link = root / "link.txt"
+        link.symlink_to(outside)
+        with self._res(root) as res:
+            monkeypatch.setattr(res, "_secure_path_and_root", lambda _p: (link, root))
+            with pytest.raises(PermissionError, match="changed to a symlink"):
+                res.open_secure(link, "w")
+        assert outside.read_text() == "untouched"
+
+
+def _current_umask() -> int:
+    current = os.umask(0)
+    os.umask(current)
+    return current
