@@ -934,3 +934,43 @@ def test_http_client_kwargs_base_url_is_ssrf_checked():
             fs_options={"client_kwargs": {"base_url": "http://127.0.0.1:8080"}},
         )
 
+
+# ---------------------------------------------------------------------------
+# _with_retry: permanent OSErrors are not retried
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "exc_type",
+    [FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError, FileExistsError],
+)
+def test_with_retry_raises_permanent_errors_immediately(monkeypatch, exc_type):
+    from boti.core import filesystem as fs_module
+
+    calls = []
+    monkeypatch.setattr(fs_module.time, "sleep", lambda s: calls.append(("sleep", s)))
+
+    def fail():
+        calls.append("call")
+        raise exc_type("nope")
+
+    with pytest.raises(exc_type):
+        fs_module._with_retry(fail, max_attempts=3, base_delay=0.01)
+    assert calls == ["call"]
+
+
+@pytest.mark.parametrize("exc_type", [OSError, TimeoutError, ConnectionResetError])
+def test_with_retry_still_retries_transient_errors(monkeypatch, exc_type):
+    from boti.core import filesystem as fs_module
+
+    monkeypatch.setattr(fs_module.time, "sleep", lambda s: None)
+    attempts = []
+
+    def flaky():
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise exc_type("blip")
+        return "ok"
+
+    assert fs_module._with_retry(flaky, max_attempts=3, base_delay=0.01) == "ok"
+    assert len(attempts) == 3

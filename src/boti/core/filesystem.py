@@ -178,11 +178,15 @@ def create_filesystem(config: FilesystemConfig) -> fsspec.AbstractFileSystem:
     return fsspec.filesystem(config.fs_type, **_filesystem_options_with_compat(config))
 
 
-# Transient error types that are safe to retry across all backends.
-_RETRYABLE_ERRORS: tuple[type[Exception], ...] = (
-    OSError,
-    TimeoutError,
-    ConnectionError,
+# Backends surface transient failures (timeouts, resets, throttling) as
+# OSError subclasses, but so do permanent ones: a missing key, a 403, a path
+# that is a directory. Retrying those only delays the same answer.
+_PERMANENT_ERRORS: tuple[type[OSError], ...] = (
+    FileNotFoundError,
+    FileExistsError,
+    PermissionError,
+    IsADirectoryError,
+    NotADirectoryError,
 )
 
 # Exponential back-off base: each retry's delay doubles relative to the last.
@@ -196,7 +200,7 @@ def _with_retry[T](
     base_delay: float = 0.5,
     label: str = "operation",
 ) -> T:
-    """Call *fn* with exponential back-off on transient errors.
+    """Call *fn* with exponential back-off on transient ``OSError``s.
 
     Args:
         fn: Zero-argument callable to retry.
@@ -208,13 +212,16 @@ def _with_retry[T](
         The return value of *fn* on the first successful call.
 
     Raises:
-        The last exception raised by *fn* if all attempts fail.
+        The last exception raised by *fn* if all attempts fail, or the first
+        one if it is permanent (``_PERMANENT_ERRORS``) and retrying is futile.
     """
     last_exc: Exception | None = None
     for attempt in range(1, max_attempts + 1):
         try:
             return fn()
-        except _RETRYABLE_ERRORS as exc:
+        except _PERMANENT_ERRORS:
+            raise
+        except OSError as exc:
             last_exc = exc
             if attempt == max_attempts:
                 break
