@@ -1,13 +1,15 @@
 """
 Curated public API for the core Boti package.
+
+``import boti`` is deliberately cheap: nothing under ``boti.core`` (and so
+none of fsspec, pyarrow or the logging runtime) is loaded until one of the
+names below — or ``boti.core`` itself — is first accessed.
 """
 
 from __future__ import annotations
 
 import importlib
 from typing import Any
-
-import boti.core  # noqa: F401  # Import submodule so boti.core namespace is resolvable
 
 __all__ = [
     "Logger",
@@ -20,5 +22,8 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     """Lazily import symbols from boti.core on first access."""
-    mod = importlib.import_module("boti.core")
-    return getattr(mod, name)
+    if name == "core":
+        return importlib.import_module("boti.core")
+    if name not in __all__:
+        raise AttributeError(f"module 'boti' has no attribute {name!r}")
+    return getattr(importlib.import_module("boti.core"), name)
