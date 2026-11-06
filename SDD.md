@@ -106,7 +106,7 @@ Every configuration surface is a Pydantic `BaseModel`:
 
 - **`LoggerConfig`** — validates logger names against `^[A-Za-z0-9_.-]+$`, rejects path traversal in `log_dir`, enforces base-name constraints on `log_file`.
 - **`ResourceConfig`** — carries `allow_pickle` (gated), `extra_allowed_paths` (sandbox overrides), optional pre-configured `logger`.
-- **`FilesystemConfig`** — validates `fs_type` against an allowlist of 23 known backends, applies the SSRF guard (§4.1) to every field that can name a network endpoint, normalises aliases via `from_settings` factory.
+- **`FilesystemConfig`** — validates `fs_type` against an allowlist of 23 known backends, applies the SSRF guard (§4.1) to every field that can name a network endpoint, normalises aliases via `from_settings` factory. `validate_assignment=True`: the validators re-run on `config.fs_endpoint = …` after construction, so the guard cannot be bypassed by mutation.
 - **`SqlDatabaseSettings`** — provides sane connection-pool defaults (5/10/30/1800).
 - **`FilesystemSettings`** — `BaseModel` (not `BaseSettings`), designed to be loaded via `load_prefixed_model(prefix="ETL_")`.
 - **`AgentConfig`** — the logging subset of `ResourceConfig` (`verbose`, `debug`, `logger`, `skip_logger`), `extra="forbid"`.
@@ -390,11 +390,11 @@ This is correct behaviour — allowing symlinks to implicitly widen the sandbox 
 
 ## 8. Test Coverage
 
-**File-level mapping (213 tests, all pass, ruff clean, mypy strict):**
+**File-level mapping (217 tests, all pass, ruff clean, mypy strict):**
 
 | Test file | Tests | What it covers |
 |-----------|------:|----------------|
-| `test_filesystem.py` | 91 | `FilesystemConfig` validation, SSRF guard (private/reserved/mapped/legacy IPs, hostnames, parser-differential URLs, `fs_path` and `fs_options` routes, allowlist), `FilesystemAdapter` caching/retry, `_normalize_s3_fsspec_options`, pyarrow kwargs |
+| `test_filesystem.py` | 95 | `FilesystemConfig` validation, SSRF guard (private/reserved/mapped/legacy IPs, hostnames, parser-differential URLs, `fs_path` and `fs_options` routes, allowlist, validate-on-assignment), `FilesystemAdapter` caching/retry, `_normalize_s3_fsspec_options`, pyarrow kwargs |
 | `test_lifecycle.py` | 36 | `ManagedResource` init, sync/async close barrier, reentrancy across threads and tasks, context managers, pickling, finalizer warning |
 | `test_security.py` | 30 | `SecureResource` sandbox enforcement, traversal rejection, `extra_allowed_paths` (incl. symlink rejection without a phantom GC warning), violation log survives PII filter, env-file loading, `security.py` validators |
 | `test_logger.py` | 33 | Logger init, levels, `bind()`, extras merging and text rendering, stacklevel attribution (plain and adapter paths), PII redaction (msg/args/extra/`exc_info`, cycles), multi-handler `asctime` isolation, exact-name destination routing, shared-level registry, sink routing (same name / different dirs), `close()` release, raw-stdlib routing, listener restart, log-file hardening (permissions, symlink TOCTOU), stderr fallback |

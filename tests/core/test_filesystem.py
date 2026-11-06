@@ -729,6 +729,27 @@ def test_filesystem_config_rejects_private_or_non_http_schemeless_fs_options(fs_
         FilesystemConfig(fs_type="s3", fs_path="b", fs_options=fs_options)
 
 
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("fs_endpoint", "http://169.254.169.254"),
+        ("fs_options", {"client_kwargs": {"endpoint_url": "http://127.0.0.1:9000"}}),
+        ("fs_type", "ssh"),
+    ],
+)
+def test_filesystem_config_validates_on_assignment(field, value):
+    """Post-construction assignment must not bypass the field/model validators."""
+    config = FilesystemConfig(fs_type="s3", fs_path="b")
+    with pytest.raises(ValueError):
+        setattr(config, field, value)
+
+
+def test_filesystem_config_assignment_of_valid_value_succeeds():
+    config = FilesystemConfig(fs_type="s3", fs_path="b")
+    config.fs_endpoint = "https://s3.amazonaws.com"
+    assert config.fs_endpoint == "https://s3.amazonaws.com"
+
+
 def test_filesystem_config_allowlist_covers_fs_options_endpoint():
     import boti.core.filesystem as fs_module
 

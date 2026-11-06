@@ -202,7 +202,10 @@ class FilesystemConfig(BaseModel):
     network egress controls, not this validator's.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # validate_assignment: the SSRF guard is only worth having if it also
+    # covers `config.fs_endpoint = ...` after construction. Field and model
+    # validators re-run on every assignment.
+    model_config = ConfigDict(arbitrary_types_allowed=True, validate_assignment=True)
 
     fs_type: str = Field(default="file")
     fs_path: str = Field(..., min_length=1)
