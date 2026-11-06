@@ -5,13 +5,11 @@ Typed filesystem configuration and runtime adapters.
 from __future__ import annotations
 
 import logging
-import re
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 import fsspec
 import pyarrow.fs as pafs
@@ -22,7 +20,15 @@ from boti.core.filesystem_options import (
     _filesystem_options_with_compat,
     _pyarrow_s3_kwargs_with_compat,
 )
-from boti.core.filesystem_security import _is_private_ip
+from boti.core.filesystem_security import (
+    ENDPOINT_ALLOWLIST,
+    _allowlist_endpoint_from_url,
+    _reject_private_host,
+    _validate_endpoint_url,
+    _validate_fs_options,
+    _validate_fs_type,
+    add_endpoint_to_allowlist,
+)
 from boti.core.settings import FilesystemSettings, load_prefixed_model
 
 _logger = logging.getLogger(__name__)
@@ -32,161 +38,14 @@ __all__ = [
     "FilesystemAdapter",
     "create_filesystem",
     "add_endpoint_to_allowlist",
+    "ENDPOINT_ALLOWLIST",
 ]
-
-# Explicit allowlist of fsspec backend identifiers that are safe to instantiate
-# from user-supplied or environment-backed configuration.  Arbitrary backends
-# (e.g. custom handlers, ssh, smb) must be constructed directly via fsspec.
-_ALLOWED_FS_TYPES: frozenset[str] = frozenset(
-    {
-        "file",
-        "local",
-        "memory",
-        "s3",
-        "s3a",
-        "gcs",
-        "gs",
-        "az",
-        "abfs",
-        "adl",
-        "ftp",
-        "sftp",
-        "http",
-        "https",
-        "zip",
-        "tar",
-        "blockcache",
-        "filecache",
-        "simplecache",
-        "github",
-        "git",
-        "arrow_hdfs",
-        "hdfs",
-    }
-)
 
 # Backend identifiers dispatched on explicitly below (storage_path's s3://
 # prefixing, _build_pyarrow_filesystem's backend selection), named rather
 # than repeated as bare string literals at each comparison site.
 _FS_TYPE_FILE = "file"
 _FS_TYPE_S3 = "s3"
-
-# Operator-configurable allowlist for storage endpoints.  Use
-# ``add_endpoint_to_allowlist("minio.internal:9000")`` at startup to permit
-# specific internal endpoints that would otherwise be blocked by the private-IP
-# guard.  Do NOT mutate this set directly from multiple threads.
-ENDPOINT_ALLOWLIST: set[str] = set()
-
-
-def add_endpoint_to_allowlist(*hosts: str) -> None:
-    """Add one or more host[:port] strings to the endpoint allowlist.
-
-    Call this once at application startup before any ``FilesystemConfig`` is
-    constructed.  Thread-safe for read-after-write scenarios where callers only
-    add entries before the first config validation.
-
-    Example::
-
-        from boti.core.filesystem import add_endpoint_to_allowlist
-        add_endpoint_to_allowlist("minio.internal:9000", "minio.internal")
-    """
-    for host in hosts:
-        ENDPOINT_ALLOWLIST.add(host.strip())
-
-
-def _allowlist_endpoint_from_url(endpoint: str) -> None:
-    """Allowlist the host[:port] parsed from *endpoint*.
-
-    Used by ``FilesystemConfig.from_env_prefix(..., trust_env_endpoint=True)``
-    so a deployment-trusted endpoint sourced from environment config doesn't
-    require a separate manual ``add_endpoint_to_allowlist()`` call.
-    """
-    parsed = urlparse(endpoint.strip())
-    hostname = parsed.hostname or ""
-    if not hostname:
-        return
-    allowlist_key = f"{hostname}:{parsed.port}" if parsed.port else hostname
-    add_endpoint_to_allowlist(allowlist_key, hostname)
-
-
-# fs_options keys that the option builders read as a storage endpoint.
-_ENDPOINT_OPTION_KEYS = ("endpoint_url", "endpoint_override", "endpoint")
-
-
-# Characters that make URL parsers disagree on where the host ends. ``urlparse``
-# reads ``http://127.0.0.1\@s3.amazonaws.com`` as host ``s3.amazonaws.com``, but
-# libcurl (pyarrow's S3 client) connects to ``127.0.0.1`` — so a hostname check
-# alone is bypassable unless these are refused up front.
-_URL_AMBIGUOUS_CHARS_RE = re.compile(r"[\\\s\x00-\x1f\x7f]")
-
-
-def _reject_ambiguous_url(url: str) -> None:
-    """Raise ValueError if different URL parsers could name different hosts for *url*."""
-    if _URL_AMBIGUOUS_CHARS_RE.search(url):
-        raise ValueError(
-            f"endpoint {url!r} contains a backslash, whitespace or control character, "
-            "which is rejected because URL parsers disagree on how to read it."
-        )
-    parsed = urlparse(url)
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError(
-            f"endpoint '{url}' must not contain a userinfo ('user:pass@') section; "
-            "pass credentials via fs_key/fs_secret/fs_token instead."
-        )
-
-
-def _reject_private_host(url: str) -> None:
-    """Raise ValueError if *url*'s host is private/reserved and not allowlisted.
-
-    *url* must carry an authority (``scheme://host`` or ``//host``). It is
-    first run through ``_reject_ambiguous_url`` so the host this function
-    checks is the host every downstream client will actually connect to.
-    """
-    url = url.strip()
-    _reject_ambiguous_url(url)
-    parsed = urlparse(url)
-    hostname = parsed.hostname or ""
-    allowlist_key = f"{hostname}:{parsed.port}" if parsed.port else hostname
-    if (
-        allowlist_key not in ENDPOINT_ALLOWLIST
-        and hostname not in ENDPOINT_ALLOWLIST
-        and _is_private_ip(hostname)
-    ):
-        raise ValueError(
-            f"endpoint '{url}' resolves to a private or reserved IP address "
-            f"({hostname}) which is blocked to prevent SSRF attacks. "
-            "Add the host to boti.core.filesystem.ENDPOINT_ALLOWLIST "
-            "if this is intentional."
-        )
-
-
-def _validate_endpoint_url(value: str) -> str:
-    """Require an http(s) scheme and a non-private host; return the stripped URL."""
-    stripped = value.strip()
-    scheme = urlparse(stripped).scheme
-    # Require an explicit http/https scheme to block file://, ftp://, etc.
-    if scheme not in {"http", "https"}:
-        raise ValueError(
-            f"endpoint scheme '{scheme}' is not allowed. "
-            "Only 'http' and 'https' endpoints are supported."
-        )
-    _reject_private_host(stripped)
-    return stripped
-
-
-def _validate_option_endpoint(value: str) -> None:
-    """SSRF-check an endpoint carried in ``fs_options``.
-
-    Unlike ``fs_endpoint``, these are commonly written as bare ``host:port``
-    (pyarrow's ``endpoint_override``, MinIO docs) and the option builders
-    supply the scheme, so a schemeless value is accepted and only its host is
-    checked. A value with a scheme must still be http(s).
-    """
-    stripped = value.strip()
-    if "://" in stripped:
-        _validate_endpoint_url(stripped)
-    else:
-        _reject_private_host(f"//{stripped}")
 
 
 class FilesystemConfig(BaseModel):
@@ -271,33 +130,18 @@ class FilesystemConfig(BaseModel):
 
         ``fs_endpoint`` is not the only way to point a backend at an internal
         address: an http(s) ``fs_path`` is the target URL itself, and
-        ``fs_options`` can carry an endpoint that the option builders pass
-        through untouched.
+        ``fs_options`` can carry endpoints, a bare ``host``, or a wrapped
+        ``target_protocol`` that fsspec passes through untouched.
         """
         if self.fs_type in {"http", "https"}:
             _reject_private_host(self.fs_path)
-        client_kwargs = self.fs_options.get("client_kwargs")
-        candidates = [self.fs_options.get(key) for key in _ENDPOINT_OPTION_KEYS]
-        if isinstance(client_kwargs, dict):
-            candidates.append(client_kwargs.get("endpoint_url"))
-        for candidate in candidates:
-            if isinstance(candidate, str):
-                _validate_option_endpoint(candidate)
+        _validate_fs_options(self.fs_options)
         return self
 
     @field_validator("fs_type")
     @classmethod
     def validate_fs_type(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("fs_type must not be empty.")
-        if normalized not in _ALLOWED_FS_TYPES:
-            raise ValueError(
-                f"fs_type '{normalized}' is not an allowed backend. "
-                f"Permitted values: {sorted(_ALLOWED_FS_TYPES)}. "
-                "To use a custom backend, construct the fsspec filesystem directly."
-            )
-        return normalized
+        return _validate_fs_type(value)
 
     @field_validator("fs_path")
     @classmethod

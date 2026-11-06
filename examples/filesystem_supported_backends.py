@@ -1,7 +1,7 @@
 """Attempt filesystem client creation for every backend supported by boti.
 
 This script performs constructor-level connection attempts for all fs types in
-`boti.core.filesystem._ALLOWED_FS_TYPES`. Some backends require optional extras,
+`boti.core.filesystem_security._ALLOWED_FS_TYPES`. Some backends require optional extras,
 credentials, or reachable services; those attempts are reported with the
 exception type and message so you can quickly identify missing prerequisites.
 
@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from boti.core.filesystem import _ALLOWED_FS_TYPES, FilesystemAdapter, FilesystemConfig
+from boti.core.filesystem import FilesystemAdapter, FilesystemConfig
+from boti.core.filesystem_security import _ALLOWED_FS_TYPES
 
 
 @dataclass(frozen=True)

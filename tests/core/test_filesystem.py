@@ -776,31 +776,31 @@ def test_filesystem_config_accepts_public_https_endpoint():
     assert config.fs_endpoint == "https://s3.amazonaws.com"
 
 
-def test_filesystem_config_accepts_allowlisted_private_endpoint():
-    import boti.core.filesystem as fs_module
+def test_filesystem_config_accepts_allowlisted_private_endpoint(monkeypatch):
+    """The allowlist lives in filesystem_security; filesystem.ENDPOINT_ALLOWLIST
+    is a re-export of the same set, so patch where the lookup happens."""
+    from boti.core import filesystem_security
 
-    original = fs_module.ENDPOINT_ALLOWLIST
-    try:
-        fs_module.ENDPOINT_ALLOWLIST = frozenset({"minio.internal:9000"})
-        # Should NOT raise even though it resolves to a private name
-        # (allowlist bypasses hostname check; IP check still requires allowlist)
-        # Use a hostname rather than a bare IP so the allowlist key matches
-        config = FilesystemConfig(
-            fs_type="s3",
-            fs_path="my-bucket",
-            fs_endpoint="http://minio.internal:9000",
-        )
-        assert "minio.internal" in config.fs_endpoint
-    finally:
-        fs_module.ENDPOINT_ALLOWLIST = original
+    monkeypatch.setattr(filesystem_security, "ENDPOINT_ALLOWLIST", {"10.9.9.9:9000"})
+    config = FilesystemConfig(
+        fs_type="s3",
+        fs_path="my-bucket",
+        fs_endpoint="http://10.9.9.9:9000",
+    )
+    assert config.fs_endpoint == "http://10.9.9.9:9000"
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type="s3", fs_path="b", fs_endpoint="http://10.9.9.9:9001")
 
 
-def test_filesystem_config_from_env_prefix_trust_env_endpoint_allowlists_private_ip(tmp_path):
+def test_filesystem_config_from_env_prefix_trust_env_endpoint_allowlists_private_ip(
+    tmp_path, monkeypatch
+):
     """trust_env_endpoint=True allowlists the env-sourced endpoint before
     validation, so a trusted internal deployment endpoint (private IP) doesn't
     require a separate manual add_endpoint_to_allowlist() call."""
-    import boti.core.filesystem as fs_module
+    from boti.core import filesystem_security
 
+    monkeypatch.setattr(filesystem_security, "ENDPOINT_ALLOWLIST", set())
     env_file = tmp_path / ".env"
     env_file.write_text(
         "MYFS_TRUST_FS_TYPE=s3\n"
@@ -809,22 +809,19 @@ def test_filesystem_config_from_env_prefix_trust_env_endpoint_allowlists_private
         encoding="utf-8",
     )
 
-    original = fs_module.ENDPOINT_ALLOWLIST
-    try:
-        fs_module.ENDPOINT_ALLOWLIST = set()
-        config = FilesystemConfig.from_env_prefix(
-            "MYFS_TRUST_", env_file=env_file, trust_env_endpoint=True
-        )
-        assert config.fs_endpoint == "http://10.211.55.28:9000"
-    finally:
-        fs_module.ENDPOINT_ALLOWLIST = original
+    config = FilesystemConfig.from_env_prefix(
+        "MYFS_TRUST_", env_file=env_file, trust_env_endpoint=True
+    )
+    assert config.fs_endpoint == "http://10.211.55.28:9000"
+    assert "10.211.55.28:9000" in filesystem_security.ENDPOINT_ALLOWLIST
 
 
-def test_filesystem_config_from_env_prefix_defaults_to_not_trusting_endpoint(tmp_path):
+def test_filesystem_config_from_env_prefix_defaults_to_not_trusting_endpoint(tmp_path, monkeypatch):
     """Without trust_env_endpoint=True, a private-IP env endpoint is still
     rejected -- the escape hatch requires explicit opt-in."""
-    import boti.core.filesystem as fs_module
+    from boti.core import filesystem_security
 
+    monkeypatch.setattr(filesystem_security, "ENDPOINT_ALLOWLIST", set())
     env_file = tmp_path / ".env"
     env_file.write_text(
         "MYFS_NOTRUST_FS_TYPE=s3\n"
@@ -833,10 +830,107 @@ def test_filesystem_config_from_env_prefix_defaults_to_not_trusting_endpoint(tmp
         encoding="utf-8",
     )
 
-    original = fs_module.ENDPOINT_ALLOWLIST
-    try:
-        fs_module.ENDPOINT_ALLOWLIST = set()
-        with pytest.raises(ValueError, match="private or reserved IP"):
-            FilesystemConfig.from_env_prefix("MYFS_NOTRUST_", env_file=env_file)
-    finally:
-        fs_module.ENDPOINT_ALLOWLIST = original
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig.from_env_prefix("MYFS_NOTRUST_", env_file=env_file)
+
+
+# ---------------------------------------------------------------------------
+# fs_options coverage: wrapper backends, bare hosts, client base URLs
+# ---------------------------------------------------------------------------
+
+
+def test_wrapper_backend_target_protocol_must_be_allowlisted():
+    with pytest.raises(ValueError, match="target_protocol 'ssh' is not an allowed backend"):
+        FilesystemConfig(
+            fs_type="simplecache",
+            fs_path="data",
+            fs_options={"target_protocol": "ssh", "target_options": {"host": "example.com"}},
+        )
+
+
+def test_wrapper_backend_target_options_endpoint_is_ssrf_checked():
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(
+            fs_type="simplecache",
+            fs_path="data",
+            fs_options={
+                "target_protocol": "s3",
+                "target_options": {"client_kwargs": {"endpoint_url": "http://169.254.169.254"}},
+            },
+        )
+
+
+def test_wrapper_backend_chain_is_checked_at_every_level():
+    """blockcache → simplecache → s3: the endpoint two layers down still counts."""
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(
+            fs_type="blockcache",
+            fs_path="data",
+            fs_options={
+                "target_protocol": "simplecache",
+                "target_options": {
+                    "target_protocol": "s3",
+                    "target_options": {"endpoint_url": "http://10.0.0.1:9000"},
+                },
+            },
+        )
+
+
+def test_wrapper_backend_public_chain_is_accepted():
+    config = FilesystemConfig(
+        fs_type="simplecache",
+        fs_path="data",
+        fs_options={
+            "target_protocol": "s3",
+            "target_options": {"client_kwargs": {"endpoint_url": "https://s3.amazonaws.com"}},
+        },
+    )
+    assert config.fs_options["target_protocol"] == "s3"
+
+
+def test_wrapper_backend_chain_depth_is_bounded():
+    options: dict = {"endpoint_url": "https://example.com"}
+    for _ in range(10):
+        options = {"target_protocol": "simplecache", "target_options": options}
+    with pytest.raises(ValueError, match="nests more than"):
+        FilesystemConfig(fs_type="simplecache", fs_path="data", fs_options=options)
+
+
+@pytest.mark.parametrize("fs_type", ["ftp", "sftp", "hdfs"])
+def test_bare_host_option_is_ssrf_checked(fs_type):
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type=fs_type, fs_path="/data", fs_options={"host": "10.1.2.3"})
+
+
+def test_bare_host_option_with_port_uses_host_port_allowlist_key(monkeypatch):
+    from boti.core import filesystem_security
+
+    monkeypatch.setattr(filesystem_security, "ENDPOINT_ALLOWLIST", {"10.1.2.3:2222"})
+    config = FilesystemConfig(
+        fs_type="sftp", fs_path="/data", fs_options={"host": "10.1.2.3", "port": 2222}
+    )
+    assert config.fs_options["port"] == 2222
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type="sftp", fs_path="/data", fs_options={"host": "10.1.2.3"})
+
+
+def test_bare_ipv6_host_option_is_ssrf_checked():
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(fs_type="ftp", fs_path="/data", fs_options={"host": "::1", "port": 21})
+
+
+def test_bare_public_host_option_is_accepted():
+    config = FilesystemConfig(
+        fs_type="ftp", fs_path="/data", fs_options={"host": "ftp.example.com"}
+    )
+    assert config.fs_options["host"] == "ftp.example.com"
+
+
+def test_http_client_kwargs_base_url_is_ssrf_checked():
+    with pytest.raises(ValueError, match="private or reserved IP"):
+        FilesystemConfig(
+            fs_type="https",
+            fs_path="https://example.com/data",
+            fs_options={"client_kwargs": {"base_url": "http://127.0.0.1:8080"}},
+        )
+
