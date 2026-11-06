@@ -72,11 +72,15 @@ class PIISecretFilter(logging.Filter):
 
     # Attributes that are part of LogRecord's standard schema — never redacted
     # as "extra" fields even if their names happen to match a sensitive keyword.
+    # ``message``/``asctime`` are set on the shared record by whichever
+    # formatter runs first, so a later destination's formatter must not treat
+    # them as caller-supplied extras either.
     LOGRECORD_STDLIB_ATTRS: frozenset[str] = frozenset(
         {
             "name",
             "msg",
             "args",
+            "asctime",
             "levelname",
             "levelno",
             "pathname",
@@ -116,7 +120,30 @@ class PIISecretFilter(logging.Filter):
             else:
                 record.__dict__[key] = self._redact_value(record.__dict__[key])
 
+        self._redact_exception(record)
         return True
+
+    # Formatters cache the rendered traceback on ``exc_text``; a formatter
+    # of our own would need the same fallback instance, so share one here.
+    _EXC_FORMATTER = logging.Formatter()
+
+    def _redact_exception(self, record: logging.LogRecord) -> None:
+        """Redact secrets embedded in an exception's message or traceback.
+
+        Exception text bypasses the ``msg``/``args`` checks above: it is only
+        rendered by the formatter, after this filter has run — and
+        ``QueueHandler.prepare()`` bakes it into ``msg`` for the listener's
+        handlers, so the leak would be permanent. Render it here, scrub it, and
+        pin the result on ``exc_text`` (which every formatter prefers over
+        re-rendering ``exc_info``).
+        """
+        # The stdlib has already normalised ``exc_info`` to a tuple (or None).
+        if record.exc_info and record.exc_info[0] is not None:
+            text = self._EXC_FORMATTER.formatException(record.exc_info)
+            record.exc_text = _SENSITIVE_ASSIGNMENT_RE.sub("[REDACTED]", text)
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = _SENSITIVE_ASSIGNMENT_RE.sub("[REDACTED]", record.exc_text)
 
     def _redact_args(self, args: Any) -> Any:
         """Redact sensitive values from positional or keyword format arguments."""

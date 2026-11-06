@@ -9,6 +9,16 @@ from logging.handlers import QueueListener
 from queue import Queue
 
 
+# Must subclass logging.Filter: Handler.addFilter accepts callables too, but
+# mypy can't type a lambda here and a named class documents the intent.
+# spaghetti-ignore[lazy-class]: see above
+class _ExactNameFilter(logging.Filter):
+    """Pass only records from the logger named exactly *name* — not its children."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.name == self.name
+
+
 class LoggerRuntime:
     """Global queue/listener state shared by all Logger instances."""
 
@@ -53,7 +63,11 @@ class LoggerRuntime:
                 )
 
             logger_name, _ = key
-            handler.addFilter(logging.Filter(name=logger_name))
+            # Exact-name match only. A plain ``logging.Filter(name=...)`` also
+            # accepts child loggers (``app`` matches ``app.child``), which would
+            # send a child's records to its parent's file and console as well
+            # as its own — a duplicate console line per ancestor.
+            handler.addFilter(_ExactNameFilter(logger_name))
             handler.setFormatter(formatter)
             cls._listener.handlers = cls._listener.handlers + (handler,)
             cls._attached_keys.add(key)

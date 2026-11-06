@@ -378,3 +378,53 @@ def test_logger_plain_message_has_no_trailing_tail(temp_log_dir):
 
     assert "nothing extra here" in content
     assert "|" not in content
+
+
+def test_extra_fields_formatter_ignores_asctime_set_by_earlier_handler():
+    """The file formatter sets ``asctime`` on the shared record before the console
+    formatter runs; the console line must not render it as a ``| asctime=`` tail."""
+    record = logging.LogRecord("fmt", logging.INFO, __file__, 1, "hello", (), None)
+    first = logger_module._default_formatter()
+    second = logger_module._default_formatter()
+
+    first.format(record)
+    assert hasattr(record, "asctime")
+    assert second.format(record).endswith("hello")
+
+
+def test_child_logger_records_do_not_reach_parent_destinations(temp_log_dir, capsys):
+    """``app`` and ``app.child`` each get their own file and exactly one console line."""
+    parent = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="app", log_file="app"))
+    child = Logger(
+        LoggerConfig(log_dir=temp_log_dir, logger_name="app.child", log_file="app_child")
+    )
+    parent.warning("from-parent")
+    child.warning("from-child")
+    time.sleep(0.5)
+
+    assert "from-child" not in (temp_log_dir / "app.log").read_text()
+    assert "from-child" in (temp_log_dir / "app_child.log").read_text()
+    assert capsys.readouterr().out.count("from-child") == 1
+
+
+def test_logger_redacts_secrets_in_exception_tracebacks(temp_log_dir):
+    """Secrets inside an exception message must not survive ``exc_info=True``."""
+    logger = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="exc_test", log_file="exc"))
+    try:
+        raise RuntimeError("connect failed password=hunter2 for host db1")
+    except RuntimeError:
+        logger.error("boom", exc_info=True)
+    time.sleep(0.5)
+
+    content = (temp_log_dir / "exc.log").read_text()
+    assert "hunter2" not in content
+    assert "RuntimeError" in content  # traceback itself is preserved
+    assert "for host db1" in content
+
+
+def test_pii_secret_filter_scrubs_preformatted_exc_text():
+    record = logging.LogRecord("x", logging.ERROR, __file__, 1, "boom", (), None)
+    record.exc_text = "Traceback...\nRuntimeError: token=abc123"
+    assert PIISecretFilter().filter(record)
+    assert "abc123" not in record.exc_text
+
