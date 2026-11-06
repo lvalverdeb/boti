@@ -66,7 +66,7 @@ def example_open_secure(project_root: Path) -> None:
         with resource.open_secure(target, "r") as f:
             lines = f.readlines()
 
-        print(f"  streamed lines: {[l.rstrip() for l in lines]}")
+        print(f"  streamed lines: {[line.rstrip() for line in lines]}")
 
 
 def example_symlink_rejected(project_root: Path) -> None:

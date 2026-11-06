@@ -30,7 +30,7 @@ class FileCounterResource(ManagedResource):
     def count_records(self, filename: str) -> int:
         path = self.data_dir / filename
         body = path.read_text()
-        return len([l for l in body.splitlines() if l.strip()])
+        return len([line for line in body.splitlines() if line.strip()])
 
     def _restore_runtime_state(self) -> None:
         pass

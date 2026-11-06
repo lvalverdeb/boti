@@ -4,23 +4,33 @@ on:
   release:
     types: [published]
 
+# Actions are pinned to commit SHAs (tag in the trailing comment) so a moved
+# tag cannot change what runs here. Bump the SHA and the comment together.
+# The gate below is the same set of checks as ci.yml and `make verify`.
+
 jobs:
   test:
-    name: Test and lint
+    name: Test, lint and type-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Run ruff check
-        run: uv run ruff check src/ tests/
+        run: uv run ruff check src/ tests/ examples/
+
+      - name: Run ruff format check
+        run: uv run ruff format --check src/ tests/ examples/
+
+      - name: Run mypy
+        run: uv run mypy src/
 
       - name: Run tests
         run: uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
@@ -33,13 +43,13 @@ jobs:
     permissions:
       id-token: write  # required for PyPI trusted publishing (OIDC)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
       - name: Build sdist and wheel
         run: uv build
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

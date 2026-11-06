@@ -54,13 +54,13 @@ test:
 	uv run pytest
 
 lint:
-	uv run ruff check src/ tests/
+	uv run ruff check src/ tests/ examples/
 
 format:
-	uv run ruff format src/ tests/
+	uv run ruff format src/ tests/ examples/
 
 format-check:
-	uv run ruff format --check src/ tests/
+	uv run ruff format --check src/ tests/ examples/
 
 typecheck:
 	uv run mypy src/

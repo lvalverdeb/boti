@@ -86,7 +86,7 @@ def bench_clean_records(logger: Logger) -> None:
 
 def bench_pii_records(logger: Logger) -> None:
     """PII-heavy: every record triggers full recursive redaction."""
-    for i in range(N_RECORDS):
+    for _ in range(N_RECORDS):
         logger.warning("sensitive operation", extra=_PII_EXTRA)
 
 
@@ -174,9 +174,8 @@ def main() -> None:
             t0 = time.perf_counter()
             fn()
             elapsed = time.perf_counter() - t0
-            print(
-                f"  {label:<40s}  {n:>6,} records  {elapsed * 1000:7.1f} ms  ({n / elapsed:,.0f} rec/s)"
-            )
+            rate = n / elapsed
+            print(f"  {label:<40s}  {n:>6,} records  {elapsed * 1000:7.1f} ms  ({rate:,.0f} rec/s)")
 
         # Flush the queue before exit
         time.sleep(0.1)
