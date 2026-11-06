@@ -172,7 +172,7 @@ env_file = ProjectService.setup_environment(project_root)
 
 ### Secure file access
 
-`SecureResource` wraps file operations in a sandbox. By default it allows paths under the detected project root and the system temporary directory, and you can add extra allowlisted paths explicitly.
+`SecureResource` wraps file operations in a sandbox. By default it allows paths under the project root (explicit `project_root`, or one detected from a `pyproject.toml`/`.git`/`.env`/`.agent` marker — never a guessed directory) and the system temporary directory, and you can add extra allowlisted paths explicitly.
 
 ```python
 from pathlib import Path

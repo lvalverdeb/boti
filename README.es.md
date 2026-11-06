@@ -172,7 +172,7 @@ env_file = ProjectService.setup_environment(project_root)
 
 ### Acceso seguro a archivos
 
-`SecureResource` envuelve las operaciones de archivos en un sandbox. Por defecto permite rutas bajo la raíz del proyecto detectada y el directorio temporal del sistema, y puedes agregar rutas de confianza adicionales de forma explícita.
+`SecureResource` envuelve las operaciones de archivos en un sandbox. Por defecto permite rutas bajo la raíz del proyecto (un `project_root` explícito, o una detectada a partir de un marcador `pyproject.toml`/`.git`/`.env`/`.agent` — nunca un directorio adivinado) y el directorio temporal del sistema, y puedes agregar rutas de confianza adicionales de forma explícita.
 
 ```python
 from pathlib import Path

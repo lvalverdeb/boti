@@ -68,7 +68,8 @@ boti/
 | `managed_resource.py` | Composes the three mixins; owns the logger | Domain logic |
 | `secure_io.py` | Sandboxed file ops | Data transformation |
 | `agent.py` | Lifecycle + logger for AI agents | Tool/LLM semantics |
-| `filesystem*.py` | Storage abstraction + SSRF guard | Business rules |
+| `filesystem.py`, `filesystem_options.py` | Storage abstraction, backend option builders | Business rules |
+| `filesystem_security.py` | Backend allowlist, endpoint allowlist, SSRF host rules, `fs_options` scan | Filesystem instantiation |
 | `logger*.py` | Structured logging pipeline | Application semantics |
 
 ### 2.2 Dependency Graph
@@ -171,8 +172,9 @@ with ManagedResource(config=ResourceConfig(allow_pickle=True)) as res:
 
 Extends `ManagedResource` with path-sandboxing:
 
+- **Root is never guessed.** `project_root` comes from the config or from `ProjectService.find_project_root()`, which returns `None` instead of the cwd/`$HOME` fallbacks that `detect_project_root()` applies for log directories. No marker and no explicit root → `ValueError` at construction (finalizer detached), not a sandbox anchored to wherever the process happens to run.
 - **`get_secure_path(path)`** — resolves the path and checks it lies within `allowed_paths` (project root + tempdir + configured extras). Raises `PermissionError` on violation.
-- **`open_secure` / `write_text_secure` / `read_text_secure`** — convenience wrappers that call `get_secure_path` first.
+- **`open_secure` / `write_text_secure` / `read_text_secure`** — `open_secure` validates with `get_secure_path`, then on POSIX opens the file component by component from its sandbox root with `O_NOFOLLOW` via `dir_fd` (`_open_beneath`). A directory or file on the validated path that is swapped for a symlink between the check and the open fails with `ELOOP`, surfaced as `PermissionError`, instead of being followed out of the sandbox (see §6.1). `write_text_secure`/`read_text_secure` go through `open_secure`. Non-POSIX platforms fall back to `open()`.
 - **Symlink rejection** — `extra_allowed_paths` entries that are symlinks are rejected at construction time, not at access time.
 - **Violation logging survives PII redaction** — the offending path is passed as a lazy `%`-argument, never interpolated into the message. `PIISecretFilter` blanks any *message* that mentions a sensitive keyword, and the most common probe target is literally `/etc/passwd`; interpolating it would turn the alert into `[REDACTED SENSITIVE DATA]`.
 
@@ -245,13 +247,15 @@ Environment vars      load_prefixed_model()      FilesystemSettings
 
 **SSRF Protection — `FilesystemConfig`:**
 
-The guard (`filesystem_security._is_private_ip` + the `_reject_*` helpers in `filesystem.py`) is applied to every field that can name a network endpoint, not just `fs_endpoint`:
+The guard lives entirely in `filesystem_security.py` (backend allowlist `_ALLOWED_FS_TYPES`, `ENDPOINT_ALLOWLIST`, `_is_private_ip`, the `_reject_*`/`_validate_*` helpers, and `_validate_fs_options`); `filesystem.py` only calls it from its validators and re-exports the two public names. It is applied to every field that can name a network endpoint, not just `fs_endpoint`:
 
 | Field | Rule |
 |---|---|
 | `fs_endpoint` | must be `http`/`https`; host checked |
 | `fs_path` when `fs_type` is `http`/`https` | the path *is* the target URL; host checked |
-| `fs_options["endpoint_url" / "endpoint_override" / "endpoint"]` and `fs_options["client_kwargs"]["endpoint_url"]` | with a scheme: same as `fs_endpoint`; bare `host[:port]` (pyarrow / MinIO style) is accepted and its host checked |
+| `fs_options["endpoint_url" / "endpoint_override" / "endpoint"]` and `fs_options["client_kwargs"]["endpoint_url" / "base_url"]` | with a scheme: same as `fs_endpoint`; bare `host[:port]` (pyarrow / MinIO style) is accepted and its host checked |
+| `fs_options["host"]` (+ `"port"`) — ftp, sftp, hdfs | the bare host is checked; `host:port` or `host` must be allowlisted to pass if private |
+| `fs_options["target_protocol"]` / `["target_options"]` — wrapper backends (`simplecache`, `filecache`, `blockcache`, `zip`, `tar`) | `target_protocol` must be in the backend allowlist; `target_options` is scanned with the same rules, recursively, to a depth of 8 |
 
 What "host checked" means:
 
@@ -266,7 +270,7 @@ What "host checked" means:
 
 ### 4.2 Retry Adapter — `FilesystemAdapter`
 
-- Wraps `create_filesystem()` with exponential backoff: defaults `max_attempts=3`, `retry_base_delay=0.5` → sleeps 0.5 s then 1.0 s before the third attempt. Retries on `OSError`/`TimeoutError`/`ConnectionError` (note: `FileNotFoundError` and `PermissionError` are `OSError`s, so a bad local path also burns the backoff before failing).
+- Wraps `create_filesystem()` with exponential backoff: defaults `max_attempts=3`, `retry_base_delay=0.5` → sleeps 0.5 s then 1.0 s before the third attempt. Retries on `OSError` (which covers `TimeoutError`/`ConnectionError`), **except** the permanent subclasses `FileNotFoundError`, `FileExistsError`, `PermissionError`, `IsADirectoryError`, `NotADirectoryError` — those are re-raised on the first attempt, so a bad local path or a 403 fails immediately instead of after ~1.5 s of backoff. (Earlier note, now moot: a bad local path also burns the backoff before failing).
 - Caches the filesystem instance behind a reentrant lock.
 - `invalidate()` clears the cache and calls `fs.invalidate_cache()` if available.
 - Supports both fsspec (`get_filesystem()`) and PyArrow (`get_pyarrow_filesystem()`) via normalised S3 kwargs.
@@ -313,9 +317,9 @@ Heuristic project-root detection:
 
 1. Checks current `os.getcwd()`.
 2. Checks `$PWD`.
-3. Inspects the call stack (`inspect.stack()[1:8]`) for caller file paths — excluding synthetic frames (`<string>`, `ipykernel_*`).
-4. For each candidate, walks up parents looking for markers (`pyproject.toml`, `.git`, `.env`, `.agent`, `src/boti`).
-5. Falls back with a `UserWarning` if no marker is found: to the first candidate (normally `cwd`), or — if every candidate is already at the filesystem root — to `Path.home()`. A `SecureResource` built without `project_root` in that state would sandbox to the home directory; set `project_root` explicitly in any deployment where markers may be absent.
+3. Inspects the call stack (`inspect.stack(0)[1:12]` — context 0, so no source lines are read from disk) for caller file paths — excluding synthetic frames (`<string>`, `ipykernel_*`) and boti's own modules (which would otherwise "find" boti's repository root from inside any caller in a checkout).
+4. For each candidate, walks up parents looking for markers (`pyproject.toml`, `.git`, `.env`, `.agent`). `.env` is a weak marker kept because a deployed container often carries nothing else; `markers=` overrides the set.
+5. `detect_project_root()` falls back with a `UserWarning` if no marker is found: to the first candidate (normally `cwd`), or — if every candidate is already at the filesystem root — to `Path.home()`. `find_project_root()` runs the same search but returns `None` instead; `SecureResource` uses it so the sandbox is never a fallback guess (§3.3).
 
 `setup_environment()` loads `.env` files into `os.environ` after verifying `is_secure_path(target, [project_root])` — preventing accidental loading of env files outside the project. Existing `os.environ` keys win unless `override=True`, matching python-dotenv.
 
@@ -352,6 +356,8 @@ SecureResource(config=ResourceConfig(
 
 This is correct behaviour — allowing symlinks to implicitly widen the sandbox would be a security hole. The requirement to explicitly allowlist the target is intentional.
 
+**Check-then-open (TOCTOU):** `get_secure_path` resolves and checks; the open happens afterwards. Between the two, an attacker with write access inside the sandbox could replace a validated directory with a symlink to the outside. `open_secure` therefore does not `open(resolved)`: it opens the sandbox root (`O_DIRECTORY`), then each path component with `O_NOFOLLOW` relative to the previous descriptor (`dir_fd`), then the file itself with `O_NOFOLLOW` — the same discipline as `openat2(RESOLVE_BENEATH)`. Any symlink met on the way raises `ELOOP`, mapped to `PermissionError`. The sandbox root's own ancestors are trusted, as they are for any `chroot`-style boundary.
+
 ### 6.2 Unpickling Guard
 
 - `ManagedResource.__getstate__` raises `TypeError` unless `config.allow_pickle=True`.
@@ -365,6 +371,7 @@ This is correct behaviour — allowing symlinks to implicitly widen the sandbox 
 - `SafeRotatingFileHandler._open()` uses `os.open(path, O_NOFOLLOW, 0o600)` — atomic, follows no symlinks.
 - `fstat` validates the opened fd is a regular file (not a FIFO, device, or socket).
 - `fchmod` enforces 0600 even if `umask` allows broader permissions.
+- `close()` is final: the stdlib `FileHandler.emit` re-opens a closed append-mode file on the next record, so a record still in flight on the listener thread when `Logger.close()` ran would re-create the log file and leak the descriptor. `SafeRotatingFileHandler.emit` drops records after `close()`.
 
 ---
 
@@ -392,19 +399,20 @@ This is correct behaviour — allowing symlinks to implicitly widen the sandbox 
 
 ## 8. Test Coverage
 
-**File-level mapping (217 tests, all pass, ruff clean, mypy strict):**
+**File-level mapping (251 tests, all pass, ruff clean, mypy strict):**
 
 | Test file | Tests | What it covers |
 |-----------|------:|----------------|
-| `test_filesystem.py` | 95 | `FilesystemConfig` validation, SSRF guard (private/reserved/mapped/legacy IPs, hostnames, parser-differential URLs, `fs_path` and `fs_options` routes, allowlist, validate-on-assignment), `FilesystemAdapter` caching/retry, `_normalize_s3_fsspec_options`, pyarrow kwargs |
+| `test_filesystem.py` | 115 | `FilesystemConfig` validation, SSRF guard (private/reserved/mapped/legacy IPs, hostnames, parser-differential URLs, `fs_path` and `fs_options` routes, allowlist, validate-on-assignment), `FilesystemAdapter` caching/retry, `_normalize_s3_fsspec_options`, pyarrow kwargs; wrapper-backend `target_protocol`/`target_options` chains, bare `host`/`port`, `client_kwargs.base_url`; `_with_retry` re-raising permanent `OSError`s immediately |
 | `test_lifecycle.py` | 36 | `ManagedResource` init, sync/async close barrier, reentrancy across threads and tasks, context managers, pickling, finalizer warning |
-| `test_security.py` | 30 | `SecureResource` sandbox enforcement, traversal rejection, `extra_allowed_paths` (incl. symlink rejection without a phantom GC warning), violation log survives PII filter, env-file loading, `security.py` validators |
-| `test_logger.py` | 33 | Logger init, levels, `bind()`, extras merging and text rendering, stacklevel attribution (plain and adapter paths), PII redaction (msg/args/extra/`exc_info`, cycles), multi-handler `asctime` isolation, exact-name destination routing, shared-level registry, sink routing (same name / different dirs), `close()` release, raw-stdlib routing, listener restart, log-file hardening (permissions, symlink TOCTOU), stderr fallback |
+| `test_security.py` | 42 | `SecureResource` sandbox enforcement, traversal rejection, `extra_allowed_paths` (incl. symlink rejection without a phantom GC warning), violation log survives PII filter, env-file loading, `security.py` validators; fail-closed root (no marker → `ValueError`, finalizer detached), `find_project_root()`, boti-frame skipping, `inspect.stack(0)`, `open_secure` modes and NOFOLLOW walk (planted symlink → `PermissionError`) |
+| `test_logger.py` | 34 | Logger init, levels, `bind()`, extras merging and text rendering, stacklevel attribution (plain and adapter paths), PII redaction (msg/args/extra/`exc_info`, cycles), multi-handler `asctime` isolation, exact-name destination routing, shared-level registry, sink routing (same name / different dirs), `close()` release, raw-stdlib routing, listener restart, log-file hardening (permissions, symlink TOCTOU), stderr fallback; closed file handler drops in-flight records |
 | `test_agent.py` | 11 | `Agent` sync/async context, `aclose` fallback to sync cleanup, idempotent close, config rejection, logger injection and verbosity, GC finalizer, use-after-close |
 | `test_lifecycle_pickle.py` | 5 | `PicklableLifecycleCoreMixin` round-trip: state preserved, locks/events rebuilt, closed state survives without re-running cleanup |
 | `test_top_level_api.py` | 4 | `boti.*` facade resolves the 5 curated names; `import boti` does **not** load `boti.core` (checked in a fresh interpreter); `boti.core` attribute resolves lazily; unknown names raise `AttributeError` |
 | `test_settings.py` | 2 | `load_prefixed_model`, `load_dotenv_values`, prefix validation, type coercion |
 | `test_package_boundaries.py` | 1 | `boti.core` does not import `boti_data` |
+| `test_main.py` | 1 | `boti check` discovers every `boti.core` module from disk |
 
 ---
 

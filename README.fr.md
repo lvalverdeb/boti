@@ -172,7 +172,7 @@ env_file = ProjectService.setup_environment(project_root)
 
 ### Accès sécurisé aux fichiers
 
-`SecureResource` encapsule les opérations sur les fichiers dans un bac à sable. Par défaut, il autorise les chemins sous la racine du projet détectée et le répertoire temporaire du système, et vous pouvez ajouter explicitement des chemins de confiance supplémentaires.
+`SecureResource` encapsule les opérations sur les fichiers dans un bac à sable. Par défaut, il autorise les chemins sous la racine du projet (un `project_root` explicite, ou une racine détectée à partir d'un marqueur `pyproject.toml`/`.git`/`.env`/`.agent` — jamais un répertoire deviné) et le répertoire temporaire du système, et vous pouvez ajouter explicitement des chemins de confiance supplémentaires.
 
 ```python
 from pathlib import Path
