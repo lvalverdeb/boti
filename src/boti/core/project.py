@@ -27,12 +27,13 @@ class ProjectService:
     Centralized service for project-level concerns like root detection and environment setup.
     """
 
+    # ``.env`` is a weak marker (a nested service directory can carry one), but
+    # a deployed container often has nothing else; pass ``markers=`` to tighten.
     DEFAULT_ROOT_MARKERS: tuple[Path, ...] = (
         Path("pyproject.toml"),
         Path(".git"),
         Path(".env"),
         Path(".agent"),
-        Path("src") / "boti",
     )
     DEFAULT_ENV_CANDIDATES: tuple[Path, ...] = (
         Path(".env"),
@@ -41,9 +42,13 @@ class ProjectService:
     )
 
     # How many caller frames to inspect when hunting for a search-path anchor.
-    # Deep enough to see past typical wrapper/decorator/test-runner frames
-    # without walking the entire stack on every call.
-    _MAX_STACK_FRAMES_FOR_SEARCH: int = 8
+    # Deep enough to see past boti's own frames (skipped, but counted) and
+    # typical wrapper/decorator/test-runner frames without walking the entire
+    # stack on every call.
+    _MAX_STACK_FRAMES_FOR_SEARCH: int = 12
+    # boti's own modules are never a useful anchor: in a checkout they would
+    # "find" boti's repository root from inside any caller.
+    _PACKAGE_DIR: Path = Path(__file__).parent.parent
 
     @staticmethod
     def detect_project_root(
@@ -55,7 +60,10 @@ class ProjectService:
         Heuristic to find the project root by looking for common markers.
 
         Searches upwards from the start_path for configurable markers like
-        'pyproject.toml', '.git', or '.env'.
+        'pyproject.toml', '.git', or '.env'. Always returns a path: when no
+        marker is found it falls back (with a ``UserWarning``) to the start
+        path, the working directory, or the home directory. Use
+        :meth:`find_project_root` when a guess is not acceptable.
 
         Args:
             start_path: The path to start the search from. Defaults to current working directory.
@@ -71,16 +79,41 @@ class ProjectService:
                 ProjectService._search_ancestors(candidate, markers=resolved_markers) or candidate
             )
 
-        return ProjectService._detect_project_root_from_candidates(resolved_markers)
+        candidates = list(ProjectService._candidate_search_paths())
+        return ProjectService._first_marked_ancestor(
+            candidates, resolved_markers
+        ) or ProjectService._fallback_project_root(candidates)
 
     @staticmethod
-    def _detect_project_root_from_candidates(resolved_markers: tuple[Path, ...]) -> Path:
+    def find_project_root(
+        start_path: str | Path | None = None,
+        *,
+        markers: Iterable[str | Path] | None = None,
+    ) -> Path | None:
+        """Like :meth:`detect_project_root`, but ``None`` instead of a fallback guess.
+
+        For callers where the root is a trust boundary (``SecureResource``'s
+        sandbox) rather than a convenience (a log directory).
+        """
+        resolved_markers = ProjectService._resolve_relative_markers(markers)
+        if start_path is not None:
+            candidate = ProjectService._normalize_search_path(start_path)
+            return ProjectService._search_ancestors(candidate, markers=resolved_markers)
         candidates = list(ProjectService._candidate_search_paths())
+        return ProjectService._first_marked_ancestor(candidates, resolved_markers)
+
+    @staticmethod
+    def _first_marked_ancestor(
+        candidates: Iterable[Path], resolved_markers: tuple[Path, ...]
+    ) -> Path | None:
         for candidate in candidates:
             detected = ProjectService._search_ancestors(candidate, markers=resolved_markers)
             if detected is not None:
                 return detected
+        return None
 
+    @staticmethod
+    def _fallback_project_root(candidates: Iterable[Path]) -> Path:
         for candidate in candidates:
             if candidate.parent != candidate:
                 warnings.warn(
@@ -121,9 +154,11 @@ class ProjectService:
 
     @staticmethod
     def _stack_frame_candidates() -> Iterable[str]:
-        for frame in inspect.stack()[1 : ProjectService._MAX_STACK_FRAMES_FOR_SEARCH]:
+        # context=0: only filenames are needed; the default reads source
+        # lines from disk for every frame.
+        for frame in inspect.stack(0)[1 : ProjectService._MAX_STACK_FRAMES_FOR_SEARCH]:
             filename = getattr(frame, "filename", None)
-            if not filename or ProjectService._is_synthetic_frame_filename(filename):
+            if not filename or ProjectService._is_unusable_frame_filename(filename):
                 continue
             # Require the path to exist on disk before using it as a search anchor.
             try:
@@ -135,13 +170,15 @@ class ProjectService:
             yield filename
 
     @staticmethod
-    def _is_synthetic_frame_filename(filename: str) -> bool:
+    def _is_unusable_frame_filename(filename: str) -> bool:
         # Anything starting with "<" (e.g. "<string>", "<stdin>", "<frozen ...>"),
-        # IPython cells, and exec'd code are not real search anchors.
+        # IPython cells, exec'd code, and boti's own modules are not real
+        # search anchors.
         return (
             filename.startswith("<")
             or filename.startswith("ipykernel_")
             or "/ipykernel/" in filename
+            or Path(filename).is_relative_to(ProjectService._PACKAGE_DIR)
         )
 
     @staticmethod

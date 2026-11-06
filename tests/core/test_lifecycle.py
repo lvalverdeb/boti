@@ -172,7 +172,7 @@ def test_managed_resource_default_logger_recovers_from_root_cwd(monkeypatch, tem
     monkeypatch.setattr(
         project_module.inspect,
         "stack",
-        lambda: [
+        lambda *_: [
             SimpleNamespace(filename="<frame>"),
             SimpleNamespace(filename=str(notebook_file)),
         ],

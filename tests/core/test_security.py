@@ -43,7 +43,7 @@ def test_project_root_detection_uses_caller_frame_when_cwd_is_root(monkeypatch, 
     monkeypatch.setattr(
         project_module.inspect,
         "stack",
-        lambda: [
+        lambda *_: [
             SimpleNamespace(filename="<frame>"),
             SimpleNamespace(filename=str(notebook_file)),
         ],
@@ -399,3 +399,74 @@ class TestSandboxBypassTechniques:
         traversal = nested / ".." / ".." / ".." / "outside" / "secret.txt"
         with res, pytest.raises(PermissionError):
             res.get_secure_path(traversal)
+
+
+# ---------------------------------------------------------------------------
+# Project-root detection: fail closed for the sandbox, anchors, markers
+# ---------------------------------------------------------------------------
+
+
+def _markerless_cwd(monkeypatch, tmp_path):
+    """Point every root-detection candidate at a directory tree with no marker."""
+    plain = tmp_path / "plain" / "deep"
+    plain.mkdir(parents=True)
+    script = plain / "script.py"
+    script.touch()
+    monkeypatch.setattr(project_module.os, "getcwd", lambda: str(plain))
+    monkeypatch.delenv("PWD", raising=False)
+    monkeypatch.setattr(
+        project_module.inspect,
+        "stack",
+        lambda *_: [SimpleNamespace(filename="<frame>"), SimpleNamespace(filename=str(script))],
+    )
+    return plain
+
+
+def test_find_project_root_returns_none_without_marker(monkeypatch, tmp_path):
+    _markerless_cwd(monkeypatch, tmp_path)
+    assert ProjectService.find_project_root() is None
+
+
+def test_detect_project_root_still_falls_back_with_warning(monkeypatch, tmp_path):
+    plain = _markerless_cwd(monkeypatch, tmp_path)
+    with pytest.warns(UserWarning, match="could not locate a project root marker"):
+        assert ProjectService.detect_project_root() == plain.resolve()
+
+
+def test_src_boti_is_no_longer_a_root_marker(tmp_path):
+    fake = tmp_path / "somewhere"
+    (fake / "src" / "boti").mkdir(parents=True)
+    assert ProjectService.find_project_root(start_path=fake) is None
+
+
+def test_stack_walk_skips_boti_package_frames(monkeypatch, tmp_path):
+    """boti's own modules are never an anchor — otherwise any call from inside
+    a boti checkout would 'find' boti's repository root."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.setattr(project_module.os, "getcwd", lambda: str(plain))
+    monkeypatch.delenv("PWD", raising=False)
+    monkeypatch.setattr(
+        project_module.inspect,
+        "stack",
+        lambda *_: [
+            SimpleNamespace(filename="<frame>"),
+            SimpleNamespace(filename=project_module.__file__),
+        ],
+    )
+    assert ProjectService.find_project_root() is None
+
+
+def test_stack_walk_does_not_read_source_context(monkeypatch, temp_project_root):
+    """inspect.stack() with the default context=1 reads source lines for every
+    frame; detection only needs filenames."""
+    seen = []
+
+    def fake_stack(context=1):
+        seen.append(context)
+        return [SimpleNamespace(filename="<frame>")]
+
+    monkeypatch.setattr(project_module.os, "getcwd", lambda: str(temp_project_root))
+    monkeypatch.setattr(project_module.inspect, "stack", fake_stack)
+    ProjectService.detect_project_root()
+    assert seen == [0]
