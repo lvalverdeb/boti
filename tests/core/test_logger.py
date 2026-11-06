@@ -496,14 +496,16 @@ def test_logger_close_releases_destinations_queue_handler_and_cache_entry(temp_l
     log_file = temp_log_dir / "closeme.log"
     assert "before close" in log_file.read_text()
     file_handlers = [
-        h for h in LoggerRuntime._destinations["closeme"] if isinstance(h, SafeRotatingFileHandler)
+        h
+        for h in LoggerRuntime._destinations[logger._sink]
+        if isinstance(h, SafeRotatingFileHandler)
     ]
     assert len(file_handlers) == 1 and file_handlers[0].stream is not None
 
     logger.close()
     logger.close()  # idempotent
 
-    assert "closeme" not in LoggerRuntime._destinations
+    assert logger._sink not in LoggerRuntime._destinations
     assert not any(k[0] == "closeme" for k in LoggerRuntime._attached_keys)
     assert not any(isinstance(h, QueueHandler) for h in logger.core.handlers)
     assert file_handlers[0].stream is None  # file handle closed
@@ -539,12 +541,65 @@ def test_logger_runtime_registry_and_destinations_stay_consistent(temp_log_dir):
 
     names = [f"bulk{i}" for i in range(40)]
     loggers = [Logger.default_logger(log_dir=temp_log_dir, logger_name=n) for n in names]
-    assert all(n in LoggerRuntime._destinations for n in names)
-    assert sum(len(LoggerRuntime._destinations[n]) for n in names) == 2 * len(names)
+    assert all(lg._sink in LoggerRuntime._destinations for lg in loggers)
+    assert sum(len(LoggerRuntime._destinations[lg._sink]) for lg in loggers) == 2 * len(names)
     assert all(lg in Logger._default_logger_cache.values() for lg in loggers)
 
     for lg in loggers:
         lg.close()
 
-    assert not any(n in LoggerRuntime._destinations for n in names)
+    assert not any(lg._sink in LoggerRuntime._destinations for lg in loggers)
     assert not any(lg in Logger._default_logger_cache.values() for lg in loggers)
+
+
+def test_same_name_loggers_in_different_dirs_do_not_cross_write(tmp_path, capsys):
+    """Two ManagedResource instances of one class with different project roots
+    share logging.getLogger(ClassName); each must still write only to its own
+    file — records are routed by sink, not by name."""
+    dir_a, dir_b = tmp_path / "a", tmp_path / "b"
+    a = Logger.default_logger(log_dir=dir_a, logger_name="Shared")
+    b = Logger.default_logger(log_dir=dir_b, logger_name="Shared")
+    assert a is not b and a.core is b.core
+
+    a.warning("from-a")
+    b.warning("from-b")
+    time.sleep(0.3)
+
+    a_log, b_log = (dir_a / "Shared.log").read_text(), (dir_b / "Shared.log").read_text()
+    assert "from-a" in a_log and "from-b" not in a_log
+    assert "from-b" in b_log and "from-a" not in b_log
+    out = capsys.readouterr().out
+    assert out.count("from-a") == 1 and out.count("from-b") == 1
+
+    # Closing one must not detach the queue handler the other still relies on.
+    a.close()
+    b.warning("still-b")
+    time.sleep(0.3)
+    assert "still-b" in (dir_b / "Shared.log").read_text()
+    b.close()
+
+
+def test_raw_stdlib_logger_destinations_still_route_by_name(tmp_path):
+    """add_destination() without a sink serves plain logging.getLogger() users
+    (the documented LoggerRuntime example) — their records carry no sink stamp."""
+    from logging.handlers import QueueHandler
+
+    from boti.core.logger_runtime import LoggerRuntime
+
+    LoggerRuntime.ensure_listener()
+    path = tmp_path / "raw.log"
+    LoggerRuntime.add_destination(
+        ("raw_app", str(path)),
+        SafeRotatingFileHandler(path, delay=True),
+        logging.Formatter("%(message)s"),
+    )
+    raw = logging.getLogger("raw_app")
+    raw.setLevel(logging.INFO)
+    raw.addHandler(QueueHandler(LoggerRuntime.ensure_queue()))
+    try:
+        raw.info("hello raw")
+        time.sleep(0.3)
+        assert "hello raw" in path.read_text()
+    finally:
+        raw.handlers.clear()
+        LoggerRuntime.remove_destinations(("raw_app", ""), {("raw_app", str(path))})

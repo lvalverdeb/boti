@@ -23,7 +23,7 @@ __all__ = ["Logger"]
 
 from boti.core.logger_filters import PIISecretFilter
 from boti.core.logger_handlers import SafeRotatingFileHandler
-from boti.core.logger_runtime import LoggerRuntime
+from boti.core.logger_runtime import SINK_ATTR, LoggerRuntime, Sink
 from boti.core.models import LoggerConfig
 from boti.core.project import ProjectService
 
@@ -119,6 +119,12 @@ class Logger:
         self._core.setLevel(self.log_level)
         self._core.propagate = False
 
+        # Every Logger with this name shares self._core, so the stdlib logger
+        # cannot tell their records apart. Each record is stamped with this
+        # sink (see _log) and LoggerRuntime dispatches on it, so this Logger's
+        # records reach only this Logger's destinations.
+        self._sink: Sink = (self.logger_name, str(self.log_dir))
+        self._destination_keys: set[tuple[str, str]] = set()
         self._extra: dict[str, Any] = {}
         self._setup_handlers()
 
@@ -215,21 +221,23 @@ class Logger:
     def close(self) -> None:
         """Release this logger's runtime resources.
 
-        Detaches the queue handler from the stdlib logger, closes every
-        destination registered under this logger's name (file handles
-        included), and drops the ``default_logger()`` registry entry so a
-        later ``default_logger()`` call with the same arguments builds a fresh
-        one. Records for this name still waiting in the queue are discarded.
-        Idempotent. ``bind()`` clones share the same name and are closed too.
+        Closes this Logger's destinations (file handles included), drops the
+        ``default_logger()`` registry entry so a later call with the same
+        arguments builds a fresh one, and — if no other Logger with this name
+        is still registered — detaches the shared queue handler from the
+        stdlib logger. Records for this Logger still waiting in the queue are
+        discarded. Idempotent. ``bind()`` clones share the sink and are closed
+        too.
 
         Only needed by applications that create many short-lived named
         loggers; long-lived loggers can be left to interpreter shutdown.
         """
         with LoggerRuntime.lock:
-            for handler in list(self._core.handlers):
-                if isinstance(handler, QueueHandler):
-                    self._core.removeHandler(handler)
-            LoggerRuntime.remove_destinations(self.logger_name)
+            LoggerRuntime.remove_destinations(self._sink, self._destination_keys)
+            if not LoggerRuntime.has_sinks_for(self.logger_name):
+                for handler in list(self._core.handlers):
+                    if isinstance(handler, QueueHandler):
+                        self._core.removeHandler(handler)
         with Logger._default_logger_lock:
             for key, cached in list(Logger._default_logger_cache.items()):
                 if cached is self:
@@ -237,12 +245,9 @@ class Logger:
 
     def _log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
         extra: _LogExtra = kwargs.pop("extra", None)
-        merged_extra = {**self._extra, **(extra or {})}
+        merged_extra = {**self._extra, **(extra or {}), SINK_ATTR: self._sink}
         kwargs.setdefault("stacklevel", self._CALLER_STACKLEVEL)
-        if merged_extra:
-            logging.LoggerAdapter(self._core, merged_extra).log(level, msg, *args, **kwargs)
-        else:
-            self._core.log(level, msg, *args, **kwargs)
+        self._core.log(level, msg, *args, extra=merged_extra, **kwargs)
 
     def debug(self, msg: str, *args: Any, **kwargs: Any) -> None:
         self._log(logging.DEBUG, msg, *args, **kwargs)
@@ -297,7 +302,9 @@ class Logger:
     def _attach_queue_and_destinations(self, log_file_path: Path) -> None:
         """Wire this logger into the global queue listener and register its destinations."""
         file_key = (self.logger_name, str(log_file_path.resolve()))
-        console_key = (self.logger_name, "__console__")
+        # Per sink, not per name: a second Logger with this name but another
+        # log_dir needs its own console destination.
+        console_key = (self.logger_name, f"__console__@{self.log_dir}")
         fmt = _default_formatter()
 
         with LoggerRuntime.lock:
@@ -319,9 +326,12 @@ class Logger:
                     delay=True,
                 ),
                 fmt,
+                sink=self._sink,
             )
-
-            LoggerRuntime.add_destination(console_key, logging.StreamHandler(sys.stdout), fmt)
+            LoggerRuntime.add_destination(
+                console_key, logging.StreamHandler(sys.stdout), fmt, sink=self._sink
+            )
+            self._destination_keys.update({file_key, console_key})
 
     def _setup_stderr_only_handler(self) -> None:
         """Attach a simple stderr handler when file logging is unavailable."""
@@ -332,8 +342,13 @@ class Logger:
                 qh = QueueHandler(LoggerRuntime.ensure_queue())
                 qh.addFilter(PIISecretFilter())
                 self._core.addHandler(qh)
-            console_key = (self.logger_name, "__console__")
-            LoggerRuntime.add_destination(console_key, logging.StreamHandler(sys.stderr), fmt)
+            # Per sink, not per name: a second Logger with this name but another
+            # log_dir needs its own console destination.
+            console_key = (self.logger_name, f"__console__@{self.log_dir}")
+            LoggerRuntime.add_destination(
+                console_key, logging.StreamHandler(sys.stderr), fmt, sink=self._sink
+            )
+            self._destination_keys.add(console_key)
 
     @staticmethod
     def _restrict_permissions(path: Path, mode: int) -> None:

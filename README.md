@@ -260,6 +260,8 @@ logger.set_level(Logger.INFO)
 logger.info("rows loaded=%s", 1200)
 ```
 
+Every `Logger` with the same `logger_name` shares one stdlib logger, so the level is per name. Each `Logger` still writes only to its own destinations: two instances with the same name but different `log_dir`s never receive each other's records. `logger.close()` releases a logger's file handles and its `default_logger()` registry entry — useful when a long-running process creates many short-lived named loggers.
+
 ### Subclassing `ManagedResource`
 
 `ManagedResource` supports both synchronous and asynchronous cleanup patterns, so custom resources can expose the same lifecycle contract whether they wrap filesystems, clients, sockets, or other runtime state.
@@ -581,7 +583,7 @@ An agent that implements only a synchronous `_cleanup()` still works under `asyn
 
   **Logging**
 
-  - [`logger.py`](examples/logger.py) — `Logger` with secure file handling, PII redaction (passwords, tokens, API keys), structured logging, `default_logger()` factory with LRU caching, and per-namespace loggers.
+  - [`logger.py`](examples/logger.py) — `Logger` with secure file handling, PII redaction (passwords, tokens, API keys), structured logging, `default_logger()` registry, `close()`, and per-namespace loggers.
   - [`logger_runtime.py`](examples/logger_runtime.py) — `LoggerRuntime` background listener, multi-destination logging (file + stderr), `SafeRotatingFileHandler`, and graceful shutdown.
 
   - [`logger_bind.py`](examples/logger_bind.py) — `Logger.bind()` for request/task-scoped structured logging: a bound copy carrying merged `extra` context into every subsequent call, chained binds accumulating fields, child-vs-parent isolation, and bound context still passing through PII redaction.

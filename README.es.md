@@ -260,6 +260,8 @@ logger.set_level(Logger.INFO)
 logger.info("filas cargadas=%s", 1200)
 ```
 
+Todos los `Logger` con el mismo `logger_name` comparten un logger de la biblioteca estándar, así que el nivel es por nombre. Cada `Logger` sigue escribiendo solo en sus propios destinos: dos instancias con el mismo nombre pero distinto `log_dir` nunca reciben los registros de la otra. `logger.close()` libera los descriptores de archivo del logger y su entrada en el registro de `default_logger()` — útil cuando un proceso de larga duración crea muchos loggers con nombre de corta vida.
+
 ### Subclasificación de `ManagedResource`
 
 `ManagedResource` soporta patrones de limpieza síncronos y asíncronos, por lo que los recursos personalizados pueden exponer el mismo contrato de ciclo de vida tanto si envuelven sistemas de archivos, clientes, sockets u otro estado de ejecución.
@@ -581,7 +583,7 @@ Un agente que solo implementa un `_cleanup()` síncrono también funciona con `a
 
   **Registro (logging)**
 
-  - [`logger.py`](examples/logger.py) — `Logger` con manejo seguro de archivos, redacción de PII (contraseñas, tokens, claves API), logging estructurado, fábrica `default_logger()` con caché LRU y loggers por espacio de nombres.
+  - [`logger.py`](examples/logger.py) — `Logger` con manejo seguro de archivos, redacción de PII (contraseñas, tokens, claves API), logging estructurado, registro `default_logger()`, `close()` y loggers por espacio de nombres.
   - [`logger_runtime.py`](examples/logger_runtime.py) — listener de fondo `LoggerRuntime`, logging multi-destino (archivo + stderr), `SafeRotatingFileHandler` y apagado graceful.
 
   - [`logger_bind.py`](examples/logger_bind.py) — `Logger.bind()` para registro estructurado con ámbito de petición/tarea: una copia vinculada que lleva contexto `extra` fusionado a cada llamada posterior, binds encadenados que acumulan campos, aislamiento entre hijo y padre y el contexto vinculado pasando aún por la redacción de PII.

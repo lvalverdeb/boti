@@ -260,6 +260,8 @@ logger.set_level(Logger.INFO)
 logger.info("lignes chargées=%s", 1200)
 ```
 
+Tous les `Logger` portant le même `logger_name` partagent un logger de la bibliothèque standard : le niveau est donc défini par nom. Chaque `Logger` n'écrit néanmoins que vers ses propres destinations : deux instances de même nom mais de `log_dir` différents ne reçoivent jamais les enregistrements l'une de l'autre. `logger.close()` libère les descripteurs de fichiers du logger et son entrée dans le registre de `default_logger()` — utile lorsqu'un processus de longue durée crée de nombreux loggers nommés à courte durée de vie.
+
 ### Sous-classement de `ManagedResource`
 
 `ManagedResource` supporte les patterns de nettoyage synchrones et asynchrones, de sorte que les ressources personnalisées peuvent exposer le même contrat de cycle de vie qu'elles encapsulent des systèmes de fichiers, des clients, des sockets ou d'autres états d'exécution.
@@ -581,7 +583,7 @@ Un agent qui n'implémente qu'un `_cleanup()` synchrone fonctionne aussi avec `a
 
   **Journalisation (logging)**
 
-  - [`logger.py`](examples/logger.py) — `Logger` avec gestion sécurisée des fichiers, suppression des PII (mots de passe, jetons, clés API), journalisation structurée, fabrique `default_logger()` avec cache LRU et loggers par espace de noms.
+  - [`logger.py`](examples/logger.py) — `Logger` avec gestion sécurisée des fichiers, suppression des PII (mots de passe, jetons, clés API), journalisation structurée, registre `default_logger()`, `close()` et loggers par espace de noms.
   - [`logger_runtime.py`](examples/logger_runtime.py) — écouteur d'arrière-plan `LoggerRuntime`, journalisation multi-destination (fichier + stderr), `SafeRotatingFileHandler` et arrêt gracieux.
 
   - [`logger_bind.py`](examples/logger_bind.py) — `Logger.bind()` pour une journalisation structurée à portée requête/tâche : une copie liée transportant un contexte `extra` fusionné dans chaque appel ultérieur, des binds chaînés accumulant des champs, l'isolation entre enfant et parent, et le contexte lié passant toujours par la rédaction des PII.

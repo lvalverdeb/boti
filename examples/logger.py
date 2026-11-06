@@ -5,7 +5,8 @@ Demonstrates:
   - Logger instantiation with LoggerConfig
   - Basic logging at all levels
   - PII redaction (passwords, tokens, API keys in extra dicts)
-  - default_logger() factory with LRU caching
+  - default_logger() factory: one registered Logger per (log_dir, name, log_file)
+  - Logger.close() to release a logger's file handles and registry entry
   - Exception logging with exc_info
   - set_level() runtime control
   - Multiple named loggers
@@ -88,9 +89,9 @@ def example_pii_redaction() -> None:
 
 
 def example_default_logger() -> None:
-    """Quick factory method with LRU-cached instances."""
+    """Quick factory method: one registered Logger per (log_dir, name, log_file)."""
     with TemporaryDirectory() as tmp_dir:
-        # First call creates and caches a new Logger
+        # First call creates and registers a new Logger
         logger_a = Logger.default_logger(
             log_dir=Path(tmp_dir) / "logs",
             logger_name="examples.cache",
@@ -98,7 +99,7 @@ def example_default_logger() -> None:
         )
         logger_a.info("first message — cache miss")
 
-        # Second call with same key returns the cached instance
+        # Second call with the same key returns the registered instance
         logger_b = Logger.default_logger(
             log_dir=Path(tmp_dir) / "logs",
             logger_name="examples.cache",
@@ -106,13 +107,25 @@ def example_default_logger() -> None:
         )
         print(f"  logger_a is logger_b: {logger_a is logger_b}")
 
-        # Different name -> cache miss
+        # Different name -> a separate Logger with its own destinations
         logger_c = Logger.default_logger(
             log_dir=Path(tmp_dir) / "logs",
             logger_name="examples.other",
             base_dir=Path(tmp_dir),
         )
         print(f"  logger_a is logger_c: {logger_a is logger_c}")
+
+        # close() releases file handles and the registry entry; the next
+        # default_logger() with the same arguments builds a fresh one.
+        logger_c.close()
+        logger_d = Logger.default_logger(
+            log_dir=Path(tmp_dir) / "logs",
+            logger_name="examples.other",
+            base_dir=Path(tmp_dir),
+        )
+        print(f"  after close(), logger_c is logger_d: {logger_c is logger_d}")
+        logger_d.close()
+        logger_a.close()
     print()
 
 
