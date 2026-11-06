@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import pkgutil
 import platform
 import sys
 from pathlib import Path
@@ -64,19 +65,12 @@ def _check_project_root() -> list[str]:
 
 def _check_core_modules_importable() -> list[str]:
     errors: list[str] = []
+    # Discovered, not listed: a module added to boti.core is checked without
+    # anyone remembering to register it here.
+    core_dir = Path(__file__).parent / "core"
     core_modules = [
         "boti.core",
-        "boti.core.models",
-        "boti.core.security",
-        "boti.core.settings",
-        "boti.core.project",
-        "boti.core.logger",
-        "boti.core.logger_filters",
-        "boti.core.logger_handlers",
-        "boti.core.logger_runtime",
-        "boti.core.managed_resource",
-        "boti.core.secure_io",
-        "boti.core.filesystem",
+        *(f"boti.core.{info.name}" for info in pkgutil.iter_modules([str(core_dir)])),
     ]
     for mod_name in core_modules:
         try:
