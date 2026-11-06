@@ -81,7 +81,7 @@ def _make_logger(tmp: Path, name: str) -> Logger:
 def bench_clean_records(logger: Logger) -> None:
     """Baseline: no PII — measures pure emit + queue overhead."""
     for i in range(N_RECORDS):
-        logger.info("event processed record_id=%d", extra=_CLEAN_EXTRA)
+        logger.info("event processed record_id=%d", i, extra=_CLEAN_EXTRA)
 
 
 def bench_pii_records(logger: Logger) -> None:
@@ -109,9 +109,9 @@ def bench_concurrent(logger: Logger) -> None:
             barrier.wait()  # start all threads at the same moment
             for i in range(N_PER_THREAD):
                 if i % 5 == 0:
-                    logger.warning("thread %d pii record %d", tid, extra=_PII_EXTRA)
+                    logger.warning("thread %d pii record %d", tid, i, extra=_PII_EXTRA)
                 else:
-                    logger.info("thread %d clean record %d", tid, extra=_CLEAN_EXTRA)
+                    logger.info("thread %d clean record %d", tid, i, extra=_CLEAN_EXTRA)
         except Exception as exc:  # noqa: BLE001
             errors.append(exc)
 

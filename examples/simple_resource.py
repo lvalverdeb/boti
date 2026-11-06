@@ -74,12 +74,16 @@ def example_restore_runtime_state() -> None:
 
 
 def example_gc_warning() -> None:
-    """A resource that is GC'd without close emits a warning via weakref.finalize."""
+    """A resource that is GC'd without close emits a warning via weakref.finalize.
+
+    With a logger configured the leak is reported through it instead; use
+    ``skip_logger=True`` so the ``ResourceWarning`` path is what we observe here.
+    """
     import warnings
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        _leaked = SimpleResource(name="leaky")
+        _leaked = SimpleResource(name="leaky", config=ResourceConfig(skip_logger=True))
         _leaked = None  # allow GC
 
         gc_warnings = [w for w in caught if "garbage collected" in str(w.message)]

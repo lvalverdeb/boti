@@ -107,7 +107,10 @@ def example_s3_config_structure() -> None:
     )
 
     print(f"[s3] storage_path:  {config.storage_path}")
-    print(f"[s3] fsspec options: {config.to_fsspec_options()}")
+    # to_fsspec_options() returns plaintext credentials — never print it as-is.
+    options = config.to_fsspec_options()
+    shown = {k: ("***" if k in {"secret", "token"} else v) for k, v in options.items()}
+    print(f"[s3] fsspec options: {shown}")
 
     # To get a live filesystem:
     #   adapter = FilesystemAdapter(config)
