@@ -3,6 +3,7 @@ Built-in SecureResource example for sandboxed file I/O.
 
 Demonstrates:
   - SecureResource for sandboxed read/write operations
+  - Relative paths anchored to project_root (never the cwd); open_strategy
   - Path traversal rejection (PermissionError)
   - extra_allowed_paths for expanding sandbox boundaries
   - open_secure() for stream-based I/O
@@ -29,6 +30,20 @@ def example_basic_io(project_root: Path) -> None:
 
     print(f"  wrote/read: {content!r}")
     print(f"  secure_path: {secure_path}")
+
+
+def example_relative_paths(project_root: Path) -> None:
+    """Relative paths anchor to project_root — never to the working directory."""
+    (project_root / "notes").mkdir()
+    with SecureResource(config=ResourceConfig(project_root=project_root)) as resource:
+        resource.write_text_secure("notes/relative.txt", "anchored to the root")
+        print(f"  'notes/relative.txt' -> {resource.get_secure_path('notes/relative.txt')}")
+        print(f"  read back: {resource.read_text_secure('notes/relative.txt')!r}")
+        print(f"  open strategy on this host: {SecureResource.open_strategy}")
+        try:
+            resource.read_text_secure("../../../../../../etc/passwd")
+        except PermissionError as exc:
+            print(f"  blocked: {exc}")
 
 
 def example_traversal_rejected(project_root: Path) -> None:
@@ -108,6 +123,8 @@ def main() -> None:
             "[project]\nname='example'\n", encoding="utf-8"
         )
         example_basic_io(project_root)
+        print()
+        example_relative_paths(project_root)
         print()
         example_traversal_rejected(project_root)
         print()

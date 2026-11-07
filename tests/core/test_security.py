@@ -2,9 +2,11 @@
 Tests for security and path sandboxing.
 """
 
+import errno
 import logging
 import os
 import stat
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -500,6 +502,48 @@ def test_stack_walk_does_not_read_source_context(monkeypatch, temp_project_root)
 # ---------------------------------------------------------------------------
 
 
+def _host_open_strategies() -> list[str]:
+    strategies = ["open"]
+    if secure_io_module._OPEN_BENEATH_SUPPORTED:
+        strategies.insert(0, "walk")
+    if secure_io_module._openat2.available():
+        strategies.insert(0, "openat2")
+    return strategies
+
+
+@pytest.fixture(params=_host_open_strategies())
+def open_strategy(request, monkeypatch):
+    """Run the test under each open strategy the host can execute."""
+    monkeypatch.setattr(SecureResource, "open_strategy", request.param)
+    return request.param
+
+
+@pytest.fixture
+def toctou_strategy(open_strategy):
+    """Strategies that defend the open itself; plain open() cannot."""
+    if open_strategy == "open":
+        pytest.skip("the open strategy has no post-validation defence by design")
+    return open_strategy
+
+
+def test_selected_open_strategy_matches_the_platform():
+    """A silent fallback must fail CI: Linux runners are new enough for openat2,
+    macOS has dir_fd but no openat2."""
+    expected = {"linux": "openat2", "darwin": "walk"}.get(sys.platform)
+    if expected is None:
+        pytest.skip(f"no strategy expectation recorded for {sys.platform}")
+    assert SecureResource.open_strategy == expected
+    assert expected == secure_io_module._OPEN_STRATEGY
+
+
+def test_strategy_env_override_is_honoured_only_when_supported(monkeypatch):
+    monkeypatch.setenv("BOTI_OPEN_STRATEGY", "open")
+    assert secure_io_module._select_open_strategy() == "open"
+    monkeypatch.setenv("BOTI_OPEN_STRATEGY", "bogus")
+    assert secure_io_module._select_open_strategy() == _host_open_strategies()[0]
+
+
+@pytest.mark.usefixtures("open_strategy")
 class TestOpenSecure:
     def _res(self, root):
         return SecureResource(config=ResourceConfig(project_root=root, skip_logger=True))
@@ -544,12 +588,12 @@ class TestOpenSecure:
         expected = 0o666 & ~_current_umask()
         assert stat.S_IMODE(target.stat().st_mode) == expected
 
-    @pytest.mark.skipif(not secure_io_module._OPEN_BENEATH_SUPPORTED, reason="needs openat()")
+    @pytest.mark.usefixtures("toctou_strategy")
     def test_symlink_planted_after_validation_is_refused(self, temp_project_root, monkeypatch):
         """TOCTOU: the path validated by get_secure_path() is then opened via a
-        NOFOLLOW walk, so a component swapped for a symlink in between is
-        refused rather than followed. Simulated by handing open_secure a
-        validated path whose directory is already a symlink."""
+        NOFOLLOW walk (or openat2 RESOLVE_NO_SYMLINKS), so a component swapped
+        for a symlink in between is refused rather than followed. Simulated by
+        handing open_secure a validated path whose directory is already a symlink."""
         root = temp_project_root.resolve()
         outside = root.parent / "outside_for_toctou"
         outside.mkdir(exist_ok=True)
@@ -562,7 +606,7 @@ class TestOpenSecure:
             with pytest.raises(PermissionError, match="changed to a symlink"):
                 res.open_secure(swapped)
 
-    @pytest.mark.skipif(not secure_io_module._OPEN_BENEATH_SUPPORTED, reason="needs openat()")
+    @pytest.mark.usefixtures("toctou_strategy")
     def test_symlink_as_final_component_is_refused_on_write(self, temp_project_root, monkeypatch):
         root = temp_project_root.resolve()
         outside = root.parent / "outside_target.txt"
@@ -574,6 +618,98 @@ class TestOpenSecure:
             with pytest.raises(PermissionError, match="changed to a symlink"):
                 res.open_secure(link, "w")
         assert outside.read_text() == "untouched"
+
+    @pytest.mark.usefixtures("toctou_strategy")
+    def test_dotdot_escape_past_the_root_is_refused_at_open(self, temp_project_root, monkeypatch):
+        """A validated path never contains '..'; one that does means resolution
+        was bypassed. openat2 answers EXDEV under RESOLVE_BENEATH, the walk
+        refuses it before stepping — both surface as PermissionError."""
+        root = temp_project_root.resolve()
+        outside = root.parent / "outside_for_dotdot.txt"
+        outside.write_text("TOP SECRET")
+        escape = root / ".." / outside.name
+        with self._res(root) as res:
+            monkeypatch.setattr(res, "_secure_path_and_root", lambda _p: (escape, root))
+            with pytest.raises(PermissionError, match="escapes the sandbox"):
+                res.open_secure(escape)
+
+    @pytest.mark.skipif(sys.platform != "linux", reason="/proc magic links are Linux-only")
+    @pytest.mark.usefixtures("toctou_strategy")
+    def test_proc_magic_link_under_root_is_refused(self, temp_project_root, monkeypatch):
+        root = temp_project_root.resolve()
+        link = root / "fd0"
+        link.symlink_to("/proc/self/fd/0")
+        with self._res(root) as res:
+            monkeypatch.setattr(res, "_secure_path_and_root", lambda _p: (link, root))
+            with pytest.raises(PermissionError):
+                res.open_secure(link)
+
+    @pytest.mark.skipif(not secure_io_module._openat2.available(), reason="needs openat2")
+    def test_openat2_eagain_is_retried_then_denied(self, temp_project_root, monkeypatch):
+        target = temp_project_root.resolve() / "f.txt"
+        target.write_text("x")
+        calls: list[int] = []
+
+        def flaky(dir_fd, path, flags, mode=0):
+            calls.append(dir_fd)
+            raise OSError(errno.EAGAIN, "try again", path)
+
+        monkeypatch.setattr(SecureResource, "open_strategy", "openat2")
+        monkeypatch.setattr(secure_io_module._openat2, "open_beneath", flaky)
+        with self._res(temp_project_root.resolve()) as res, pytest.raises(PermissionError):
+            res.open_secure(target)
+        assert len(calls) == secure_io_module._OPENAT2_ATTEMPTS
+
+
+class TestPathAnchoring:
+    """Relative paths resolve against project_root, never the working directory."""
+
+    def _isolated(self, tmp_path, monkeypatch):
+        fake_temp = tmp_path / "faketemp"
+        fake_temp.mkdir()
+        monkeypatch.setattr(secure_io_module.tempfile, "gettempdir", lambda: str(fake_temp))
+        root = (tmp_path / "root").resolve()
+        root.mkdir()
+        (root / "pyproject.toml").touch()
+        return root
+
+    def test_relative_path_reads_the_root_file_not_the_cwd_file(self, tmp_path, monkeypatch):
+        root = self._isolated(tmp_path, monkeypatch)
+        (root / "data.txt").write_text("root file")
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "data.txt").write_text("cwd file")
+        monkeypatch.chdir(elsewhere)
+        with SecureResource(config=ResourceConfig(project_root=root, skip_logger=True)) as res:
+            assert res.get_secure_path("data.txt") == root / "data.txt"
+            assert res.read_text_secure("data.txt") == "root file"
+            res.write_text_secure("written.txt", "via relative name")
+        assert (root / "written.txt").read_text() == "via relative name"
+        assert not (elsewhere / "written.txt").exists()
+
+    def test_dotdot_inside_root_is_allowed_and_outside_is_denied(self, tmp_path, monkeypatch):
+        root = self._isolated(tmp_path, monkeypatch)
+        (root / "sub").mkdir()
+        (root / "data.txt").write_text("x")
+        (tmp_path / "outside.txt").write_text("secret")
+        with SecureResource(config=ResourceConfig(project_root=root, skip_logger=True)) as res:
+            assert res.get_secure_path("sub/../data.txt") == root / "data.txt"
+            with pytest.raises(PermissionError):
+                res.get_secure_path("../outside.txt")
+
+    def test_tilde_is_not_expanded(self, tmp_path, monkeypatch):
+        root = self._isolated(tmp_path, monkeypatch)
+        with SecureResource(config=ResourceConfig(project_root=root, skip_logger=True)) as res:
+            assert res.get_secure_path("~/secrets.txt") == root / "~" / "secrets.txt"
+
+    def test_relative_extra_allowed_path_is_under_the_root(self, tmp_path, monkeypatch):
+        root = self._isolated(tmp_path, monkeypatch)
+        (root / "data").mkdir()
+        monkeypatch.chdir(tmp_path)
+        config = ResourceConfig(project_root=root, extra_allowed_paths=["data"], skip_logger=True)
+        with SecureResource(config=config) as res:
+            assert root / "data" in res.allowed_paths
+            assert tmp_path / "data" not in res.allowed_paths
 
 
 def _current_umask() -> int:

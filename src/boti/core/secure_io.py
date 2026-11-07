@@ -12,11 +12,13 @@ import os
 import stat
 import tempfile
 import warnings
+from collections.abc import Callable
 from pathlib import Path
-from typing import IO, Any, NoReturn
+from typing import IO, Any, ClassVar, NoReturn
 
 __all__ = ["SecureResource"]
 
+from boti.core import _openat2
 from boti.core.managed_resource import ManagedResource
 from boti.core.models import ResourceConfig
 from boti.core.project import ProjectService
@@ -36,10 +38,32 @@ _MODE_FLAGS: dict[str, int] = {
 # Same creation mode open() uses; the process umask narrows it.
 _CREATE_MODE = 0o666
 # Errno a NOFOLLOW open raises when the component is a symlink (ELOOP on
-# Linux/macOS, EMLINK on some BSDs).
+# Linux/macOS, EMLINK on some BSDs), plus EXDEV: openat2(RESOLVE_BENEATH)'s
+# verdict for a resolution that would leave the sandbox root.
 _SYMLINK_ERRNOS = frozenset({errno.ELOOP, getattr(errno, "EMLINK", errno.ELOOP)})
+_ESCAPE_ERRNOS = _SYMLINK_ERRNOS | {errno.EXDEV}
+# openat2 may report EAGAIN under RESOLVE_BENEATH when a concurrent rename made
+# the resolution unsafe; it is safe to retry a few times.
+_OPENAT2_ATTEMPTS = 3
 # The component-wise open needs openat()-style dir_fd support, which Windows lacks.
 _OPEN_BENEATH_SUPPORTED = os.name == "posix" and os.open in os.supports_dir_fd
+# Test-only override of the strategy selection below (BOTI_OPEN_STRATEGY=walk);
+# read once at import, unsupported for production.
+_STRATEGY_ENV_VAR = "BOTI_OPEN_STRATEGY"
+
+
+def _select_open_strategy() -> str:
+    """Pick the strongest open path the host supports: openat2 → walk → open."""
+    supported = ["open"]
+    if _OPEN_BENEATH_SUPPORTED:
+        supported.insert(0, "walk")
+    if _openat2.available():
+        supported.insert(0, "openat2")
+    forced = os.environ.get(_STRATEGY_ENV_VAR)
+    return forced if forced in supported else supported[0]
+
+
+_OPEN_STRATEGY = _select_open_strategy()
 
 
 def _open_flags(mode: str) -> int:
@@ -69,8 +93,31 @@ def _open_directory_beneath(name: str | Path, dir_fd: int | None) -> int:
     return fd
 
 
+def _fdopen(fd: int, mode: str, **kwargs: Any) -> IO[Any]:
+    try:
+        return os.fdopen(fd, mode, **kwargs)
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _relative_components(root: Path, target: Path) -> tuple[list[str], str]:
+    """*target* as components under *root*; a resolved path never carries ``..``.
+
+    ``relative_to`` is lexical, so a ``..`` here means the caller bypassed
+    resolution; refuse it (EXDEV, the same verdict openat2 gives an escape)
+    rather than let the walk step above the root.
+    """
+    *directories, name = target.relative_to(root).parts or ("",)
+    if not name:
+        raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), str(target))
+    if ".." in directories or name == "..":
+        raise OSError(errno.EXDEV, os.strerror(errno.EXDEV), str(target))
+    return directories, name
+
+
 def _open_beneath(root: Path, target: Path, mode: str, **kwargs: Any) -> IO[Any]:
-    """Open *target*, already resolved to lie under *root*, without following any symlink.
+    """``walk`` strategy: open *target* under *root* without following any symlink.
 
     ``get_secure_path()`` resolves symlinks and checks the result, but a
     directory on that path can be swapped for a symlink between the check and
@@ -78,9 +125,7 @@ def _open_beneath(root: Path, target: Path, mode: str, **kwargs: Any) -> IO[Any]
     (via ``dir_fd``) makes such a swap fail with ELOOP instead of being
     followed out of the sandbox.
     """
-    *directories, name = target.relative_to(root).parts or ("",)
-    if not name:
-        raise IsADirectoryError(errno.EISDIR, os.strerror(errno.EISDIR), str(target))
+    directories, name = _relative_components(root, target)
     dir_fd = _open_directory_beneath(root, None)
     try:
         for directory in directories:
@@ -91,11 +136,45 @@ def _open_beneath(root: Path, target: Path, mode: str, **kwargs: Any) -> IO[Any]
         fd = os.open(name, flags, _CREATE_MODE, dir_fd=dir_fd)
     finally:
         os.close(dir_fd)
+    return _fdopen(fd, mode, **kwargs)
+
+
+def _open_beneath_openat2(root: Path, target: Path, mode: str, **kwargs: Any) -> IO[Any]:
+    """``openat2`` strategy: the same guarantee as :func:`_open_beneath`, enforced by the kernel.
+
+    One syscall resolves the whole relative path under the root descriptor
+    with ``RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS``;
+    an escape is ``EXDEV``, a symlink ``ELOOP`` — both mapped to
+    ``PermissionError`` by the caller, like the walk's ``ELOOP``.
+    """
+    directories, name = _relative_components(root, target)
+    relative = os.path.join(*directories, name)
+    flags = _open_flags(mode) | os.O_NOFOLLOW | os.O_CLOEXEC
+    root_fd = _open_directory_beneath(root, None)
     try:
-        return os.fdopen(fd, mode, **kwargs)
-    except Exception:
-        os.close(fd)
-        raise
+        for attempt in range(1, _OPENAT2_ATTEMPTS + 1):
+            try:
+                fd = _openat2.open_beneath(root_fd, relative, flags, _CREATE_MODE)
+                break
+            except OSError as exc:
+                if exc.errno != errno.EAGAIN or attempt == _OPENAT2_ATTEMPTS:
+                    raise
+    finally:
+        os.close(root_fd)
+    return _fdopen(fd, mode, **kwargs)
+
+
+def _open_plain(root: Path, target: Path, mode: str, **kwargs: Any) -> IO[Any]:
+    """``open`` strategy: no ``dir_fd`` support (Windows); check-then-open only."""
+    _open_flags(mode)  # same mode validation (and error) as the other strategies
+    return open(target, mode, **kwargs)
+
+
+_OPENERS: dict[str, Callable[..., IO[Any]]] = {
+    "openat2": _open_beneath_openat2,
+    "walk": _open_beneath,
+    "open": _open_plain,
+}
 
 
 class SecureResource(ManagedResource):
@@ -104,8 +183,14 @@ class SecureResource(ManagedResource):
 
     Ensures that all operations remain within the project root, the system
     temporary directory, or explicitly configured extra allowed paths to
-    prevent path traversal.
+    prevent path traversal. Relative paths are anchored to ``project_root``,
+    never to the process working directory; ``~`` is not expanded.
     """
+
+    # Diagnostic, read-only: which open path this host uses — "openat2"
+    # (kernel-enforced, Linux >= 5.6), "walk" (O_NOFOLLOW component walk via
+    # dir_fd; macOS/BSD/older Linux) or "open" (no dir_fd support; Windows).
+    open_strategy: ClassVar[str] = _OPEN_STRATEGY
 
     def __init__(self, config: ResourceConfig | None = None, **kwargs: Any) -> None:
         """
@@ -153,7 +238,7 @@ class SecureResource(ManagedResource):
         """Resolve ``config.extra_allowed_paths``, rejecting symlinked entries."""
         resolved_paths: list[Path] = []
         for raw in self.config.extra_allowed_paths:
-            unresolved = Path(raw)
+            unresolved = self._anchored(raw)
             # Check for symlink BEFORE resolving — Path.resolve() follows symlinks
             # so is_symlink() on the result is always False.
             if unresolved.is_symlink():
@@ -170,6 +255,11 @@ class SecureResource(ManagedResource):
                 )
             resolved_paths.append(resolved)
         return resolved_paths
+
+    def _anchored(self, path: str | Path) -> Path:
+        """*path* as given if absolute, else joined to ``project_root`` (not cwd, not ``~``)."""
+        candidate = Path(path)
+        return candidate if candidate.is_absolute() else self.project_root / candidate
 
     def _sandbox_root_for(self, resolved: Path) -> Path | None:
         """The allowed root that contains *resolved*, or None if none does."""
@@ -195,8 +285,15 @@ class SecureResource(ManagedResource):
         """
         Validates and resolves a path within the configured sandbox roots.
 
+        This is a *check*: it resolves symlinks and verifies the result lies
+        under an allowed root. Only the ``open_secure`` family also protects
+        the open itself against a symlink planted after the check (TOCTOU);
+        prefer those over ``open(get_secure_path(p))``.
+
         Args:
-            path: The path to secure.
+            path: The path to secure. A relative path is anchored to
+                ``project_root``, never to the working directory; ``~`` is
+                not expanded.
 
         Returns:
             Path: The resolved absolute Path object.
@@ -213,7 +310,7 @@ class SecureResource(ManagedResource):
     def _secure_path_and_root(self, path: str | Path) -> tuple[Path, Path]:
         """``get_secure_path`` plus the sandbox root the result lies under."""
         try:
-            resolved = Path(path).resolve()
+            resolved = self._anchored(path).resolve()
         except (OSError, ValueError) as exc:
             self._deny(
                 "Path could not be resolved. Target: %r, Error: %s",
@@ -234,12 +331,15 @@ class SecureResource(ManagedResource):
         """
         Opens a file securely, enforcing sandbox constraints.
 
-        On POSIX the file is opened component by component from its sandbox
-        root with ``O_NOFOLLOW``, so a symlink planted anywhere on the path
-        after validation is refused (``PermissionError``) rather than followed.
+        The open is anchored to the file's sandbox root (see ``open_strategy``):
+        with ``openat2`` the kernel refuses any resolution that leaves the
+        root or crosses a symlink; with the ``walk`` the file is opened
+        component by component with ``O_NOFOLLOW``. Either way a symlink
+        planted after validation is refused (``PermissionError``) rather than
+        followed.
 
         Args:
-            path: The path to the file.
+            path: The path to the file (relative paths anchor to ``project_root``).
             mode: The file mode.
             **kwargs: Arguments for the open() function.
 
@@ -247,17 +347,16 @@ class SecureResource(ManagedResource):
             File handle.
         """
         secure_path, root = self._secure_path_and_root(path)
-        if not _OPEN_BENEATH_SUPPORTED:
-            return open(secure_path, mode, **kwargs)
         try:
-            return _open_beneath(root, secure_path, mode, **kwargs)
+            return _OPENERS[self.open_strategy](root, secure_path, mode, **kwargs)
         except OSError as exc:
-            if exc.errno not in _SYMLINK_ERRNOS:
+            if exc.errno not in _ESCAPE_ERRNOS and exc.errno != errno.EAGAIN:
                 raise
             self._deny(
-                "Symlink appeared under a validated path. Target: %s (resolved: %s)",
-                (path, secure_path),
-                f"Path {path} changed to a symlink after validation.",
+                "Validated path escaped the sandbox or crossed a symlink at open. "
+                "Target: %s (resolved: %s, errno: %s)",
+                (path, secure_path, errno.errorcode.get(exc.errno or 0, exc.errno)),
+                f"Path {path} escapes the sandbox or changed to a symlink after validation.",
                 cause=exc,
             )
 
