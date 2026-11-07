@@ -24,14 +24,14 @@ The objective is met when every line below is true at a tagged release:
 
 ## PRDs
 
-| ID | Title | Priority | Target | Depends on |
-|---|---|---|---|---|
-| [PRD-001](PRD-001-secret-redaction.md) | Secret redaction that fails closed | P0 | 1.1.1 | — |
-| [PRD-002](PRD-002-sandbox-open-path.md) | Sandbox open path: `openat2`, root-anchored relative paths | P1 | 1.2.0 | — |
-| [PRD-003](PRD-003-property-based-testing.md) | Property-based testing of the parsers | P1 | 1.2.0 | PRD-001 (shares corpus) |
-| [PRD-004](PRD-004-supply-chain.md) | Supply chain: trusted publishing, attestations, audit | P1 | 1.2.0 | owner action on PyPI |
-| [PRD-005](PRD-005-config-and-cli-parity.md) | Configuration surface parity and CLI coverage | P2 | 1.2.0 | — |
-| [PRD-006](PRD-006-security-documentation.md) | Security documentation and disclosure | P2 | 1.2.0 | PRD-001, PRD-002 (documents them) |
+| ID | Title | Priority | Target | Depends on | Status |
+|---|---|---|---|---|---|
+| [PRD-001](PRD-001-secret-redaction.md) | Secret redaction that fails closed | P0 | 1.1.1 | — | Done (1.1.1) |
+| [PRD-002](PRD-002-sandbox-open-path.md) | Sandbox open path: `openat2`, root-anchored relative paths | P1 | 1.2.0 | — | Planned |
+| [PRD-003](PRD-003-property-based-testing.md) | Property-based testing of the parsers | P1 | 1.2.0 | PRD-001 (shares corpus) | Planned |
+| [PRD-004](PRD-004-supply-chain.md) | Supply chain: trusted publishing, attestations, audit | P1 | 1.2.0 | owner action on PyPI | Planned |
+| [PRD-005](PRD-005-config-and-cli-parity.md) | Configuration surface parity and CLI coverage | P2 | 1.2.0 | — | Planned |
+| [PRD-006](PRD-006-security-documentation.md) | Security documentation and disclosure | P2 | 1.2.0 | PRD-001, PRD-002 (documents them) | Planned |
 
 ## Sequencing
 

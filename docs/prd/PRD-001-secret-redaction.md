@@ -6,7 +6,7 @@
 | Target | 1.1.1 (patch) |
 | Owner | logger maintainers |
 | Modules | `src/boti/core/logger_filters.py`, `src/boti/core/logger.py` |
-| Status | Draft |
+| Status | Done — shipped in 1.1.1 |
 
 ## 1. Problem
 
