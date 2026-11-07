@@ -1,5 +1,5 @@
 """
-Tests for the non-blocking Logger and PII redaction.
+Tests for the non-blocking Logger. Redaction tests live in test_logger_filters.py.
 """
 
 import logging
@@ -11,116 +11,9 @@ import pytest
 
 from boti.core import Logger
 from boti.core import logger as logger_module
-from boti.core.logger import PIISecretFilter
 from boti.core.logger_handlers import SafeRotatingFileHandler
 from boti.core.logger_runtime import LoggerRuntime
 from boti.core.models import LoggerConfig
-
-
-def test_logger_pii_redaction(temp_log_dir):
-    """Verify that sensitive information is redacted from logs."""
-    config = LoggerConfig(log_dir=temp_log_dir, logger_name="pii_test", log_file="pii_test")
-    logger = Logger(config)
-
-    # Log something sensitive
-    logger.info("User password is: secret123")
-    logger.info("My api_key is 'abc-xyz'")
-
-    # Give the listener a moment to process the queue
-    time.sleep(0.5)
-
-    log_file = temp_log_dir / "pii_test.log"
-    content = log_file.read_text()
-
-    assert "[REDACTED SENSITIVE DATA]" in content
-    assert "secret123" not in content
-    assert "abc-xyz" not in content
-
-
-def test_logger_pii_redaction_clears_sensitive_args(temp_log_dir):
-    """Verify format arguments containing secrets are redacted without destroying log context.
-
-    When only the *arguments* are sensitive the format string is preserved so the log
-    retains debugging context (e.g. ``credential=[REDACTED]``).  When the *format string
-    itself* contains a sensitive keyword the entire message is replaced.
-    """
-    config = LoggerConfig(
-        log_dir=temp_log_dir, logger_name="pii_args_test", log_file="pii_args_test"
-    )
-    logger = Logger(config)
-
-    # msg does not contain a sensitive key; the arg value does — arg is redacted, msg kept.
-    logger.info("credential=%s", "api_key=abc-xyz")
-    # msg contains "authorization" (a sensitive key) — entire message is redacted.
-    logger.info("authorization=%s", "Bearer secret123")
-
-    time.sleep(0.5)
-
-    log_file = temp_log_dir / "pii_args_test.log"
-    content = log_file.read_text()
-
-    # The format-string-level redaction fires for "authorization=%s"
-    assert "[REDACTED SENSITIVE DATA]" in content
-    # The arg-level redaction fires for "credential=%s" — value replaced, key kept
-    assert "[REDACTED]" in content
-    assert "abc-xyz" not in content
-    assert "secret123" not in content
-
-
-@pytest.mark.parametrize(
-    ("msg", "args"),
-    [
-        ("token for user %s is %s", ("alice", "sk-supersecret-12345")),
-        ("the api_key belonging to tenant acme: %s", ("sk-supersecret-12345",)),
-        ("Authorization header value: %s", ("Bearer sk-supersecret-12345",)),
-    ],
-)
-def test_pii_secret_filter_redacts_keyword_and_value_split_across_args(msg, args) -> None:
-    """Regression: a sensitive keyword mentioned in the format string, with the
-    actual secret arriving later as a %s-substitution arg that doesn't itself
-    look like key=value, used to leak entirely — the message-level check
-    required the keyword and a delimiter to be textually adjacent, and the
-    arg-level check only redacts an arg whose own content looks like
-    key=value. Neither half alone caught this split."""
-    record = logging.LogRecord("test", logging.INFO, "f.py", 1, msg, args, None)
-    pii_filter = PIISecretFilter()
-    pii_filter.filter(record)
-    rendered = record.getMessage()
-
-    assert rendered == PIISecretFilter._REDACTED_MESSAGE
-    for value in args:
-        assert value not in rendered
-
-
-def test_pii_secret_filter_over_redacts_bare_keyword_mentions() -> None:
-    """The safe-failure-direction tradeoff, made explicit: a message merely
-    mentioning a sensitive keyword with no value at all is now also redacted,
-    even though it carries nothing sensitive."""
-    record = logging.LogRecord(
-        "test", logging.INFO, "f.py", 1, "does not require a password", (), None
-    )
-    pii_filter = PIISecretFilter()
-    pii_filter.filter(record)
-
-    assert record.getMessage() == PIISecretFilter._REDACTED_MESSAGE
-
-
-def test_logger_pii_redaction_masks_sensitive_extra_fields():
-    """Verify sensitive extra fields are redacted on the log record itself."""
-    record = logging.LogRecord(
-        name="pii_extra_test",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="safe message",
-        args=(),
-        exc_info=None,
-    )
-    record.token = "secret123"
-
-    pii_filter = PIISecretFilter()
-    assert pii_filter.filter(record) is True
-    assert record.token == "[REDACTED]"
 
 
 def test_logger_non_blocking(temp_log_dir):
@@ -260,33 +153,6 @@ def test_logger_rejects_unsafe_logger_name(temp_log_dir):
         )
 
 
-def test_logger_pii_redaction_circular_reference():
-    """Verify that circular references in extra fields do not cause infinite recursion DoS."""
-    record = logging.LogRecord(
-        name="pii_circular_test",
-        level=logging.INFO,
-        pathname=__file__,
-        lineno=1,
-        msg="safe message",
-        args=(),
-        exc_info=None,
-    )
-
-    # Create the cyclic/circular object
-    a_dict = {}
-    a_dict["self"] = a_dict
-    a_dict["secret"] = "should_redact"
-
-    record.payload = a_dict
-
-    pii_filter = PIISecretFilter()
-    assert pii_filter.filter(record) is True
-
-    # Verify cyclic reduction succeeded without RecursionError
-    assert "self" in record.payload
-    assert record.payload["secret"] == "[REDACTED]"
-
-
 def test_logger_toctou_symlink_attack_rejected(temp_log_dir):
     """Verify that the logger refuses to write to a planted symlink log file."""
     # Plant a symlink first
@@ -406,28 +272,6 @@ def test_child_logger_records_do_not_reach_parent_destinations(temp_log_dir, cap
     assert "from-child" not in (temp_log_dir / "app.log").read_text()
     assert "from-child" in (temp_log_dir / "app_child.log").read_text()
     assert capsys.readouterr().out.count("from-child") == 1
-
-
-def test_logger_redacts_secrets_in_exception_tracebacks(temp_log_dir):
-    """Secrets inside an exception message must not survive ``exc_info=True``."""
-    logger = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="exc_test", log_file="exc"))
-    try:
-        raise RuntimeError("connect failed password=hunter2 for host db1")
-    except RuntimeError:
-        logger.error("boom", exc_info=True)
-    time.sleep(0.5)
-
-    content = (temp_log_dir / "exc.log").read_text()
-    assert "hunter2" not in content
-    assert "RuntimeError" in content  # traceback itself is preserved
-    assert "for host db1" in content
-
-
-def test_pii_secret_filter_scrubs_preformatted_exc_text():
-    record = logging.LogRecord("x", logging.ERROR, __file__, 1, "boom", (), None)
-    record.exc_text = "Traceback...\nRuntimeError: token=abc123"
-    assert PIISecretFilter().filter(record)
-    assert "abc123" not in record.exc_text
 
 
 class _RecordCapture(logging.Handler):
