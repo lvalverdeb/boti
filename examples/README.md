@@ -51,6 +51,12 @@ python examples/sql_database_settings_pool.py  # Pool tuning, worker_connection_
 # ── End-to-end ──────────────────────────────────────────────────────
 python examples/end_to_end_pipeline.py       # Combined: ProjectService + SecureResource +
                                              #   Logger + FilesystemAdapter + security
+
+# ── ETL pipelines ───────────────────────────────────────────────────
+python examples/etl_async_pipeline.py        # Async ETL pipeline — stages running concurrently with asyncio
+python examples/etl_concurrent_multiple.py   # Multiple concurrent ETL operations — mixed sources, error isolation
+python examples/etl_concurrent_threads.py    # Concurrent threaded ETL — pipeline tasks via ThreadPoolExecutor
+python examples/etl_multiprocessing_pool.py  # Multiprocessing ETL — fan-out file processing across a process pool
 ```
 
 ## What each example covers
@@ -84,3 +90,7 @@ python examples/end_to_end_pipeline.py       # Combined: ProjectService + Secure
 | `profile_path_validation.py` | `is_secure_path()`, `is_valid_identifier()`, `is_valid_dotted_identifier()` performance |
 | `profile_pii_redaction.py` | `PIISecretFilter.filter()` performance (shallow, deep nested, wide, args, clean) |
 | `end_to_end_pipeline.py` | Combined: `ProjectService` + `SecureResource` + `Logger` + `FilesystemAdapter` + `is_secure_path` + `is_valid_identifier` + `validate_environment_bindings` + `ManagedResource` lifecycle |
+| `etl_async_pipeline.py` | `ManagedResource` with native `_acleanup`, `asyncio.gather` over extract/transform/load stages, `asyncio.Queue` producer–consumer flow, structured `Logger`/`LoggerConfig` context, cancellation and cleanup on error |
+| `etl_concurrent_multiple.py` | `ManagedResource` + `FilesystemAdapter`/`FilesystemConfig` over mixed sources (API, file, memory), per-source error isolation under `ThreadPoolExecutor`, per-task structured logging |
+| `etl_concurrent_threads.py` | `ManagedResource` workers under `ThreadPoolExecutor`, thread-safe `FilesystemAdapter` access, one shared `Logger` with per-task context |
+| `etl_multiprocessing_pool.py` | `ManagedResource` pickled with `allow_pickle=True` and shipped to `multiprocessing.Pool` workers, `worker_init()` trusted-unpickle setup, `_restore_runtime_state()`, fan-out/fan-in |

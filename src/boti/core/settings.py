@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, SecretStr, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, SecretStr, TypeAdapter, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic_settings.sources import DotEnvSettingsSource
 
@@ -75,26 +76,55 @@ def load_prefixed_model[TModel: BaseModel](
     )
 
     payload: dict[str, Any] = {}
+    env_keys: dict[str, str] = {}
     for field_name, field in model_cls.model_fields.items():
         env_key = f"{normalized_prefix}{field_name.upper()}"
         raw_value = merged_bindings.get(env_key)
         if raw_value is None or raw_value == "":
             continue
+        env_keys[field_name] = env_key
+        payload[field_name] = _coerce_env_value(field.annotation, raw_value)
 
-        adapter: TypeAdapter[Any] = TypeAdapter(field.annotation)
-        try:
-            payload[field_name] = adapter.validate_python(raw_value)
-        except ValidationError:
-            try:
-                payload[field_name] = adapter.validate_json(raw_value)
-            except ValidationError as json_exc:
-                raise ValueError(
-                    f"Invalid value for environment variable {env_key!r} targeting field "
-                    f"{field_name!r}. Provide a plain scalar accepted by the field type or "
-                    "a valid JSON literal/object for structured values."
-                ) from json_exc
+    try:
+        return model_cls.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError(_describe_invalid_env_values(exc, env_keys)) from exc
 
-    return model_cls.model_validate(payload)
+
+def _coerce_env_value(annotation: Any, raw_value: str) -> Any:
+    """Best-effort typed coercion of one env string; the model's own validators get the last word.
+
+    Plain scalars first, then JSON for structured values. A string neither
+    accepts is passed through unchanged so a ``mode="before"`` validator on the
+    model can still interpret it (``none`` for an optional timeout, say); if
+    the model rejects it too, ``load_prefixed_model`` names the variable.
+    """
+    adapter: TypeAdapter[Any] = TypeAdapter(annotation)
+    try:
+        return adapter.validate_python(raw_value)
+    except ValidationError:
+        pass
+    try:
+        return adapter.validate_json(raw_value)
+    except ValidationError:
+        return raw_value
+
+
+def _describe_invalid_env_values(exc: ValidationError, env_keys: Mapping[str, str]) -> str:
+    offending = sorted(
+        {
+            env_keys[str(err["loc"][0])]
+            for err in exc.errors()
+            if err["loc"] and err["loc"][0] in env_keys
+        }
+    )
+    if not offending:
+        return f"Invalid environment-backed settings: {exc}"
+    return (
+        f"Invalid value for environment variable(s) {', '.join(repr(k) for k in offending)}. "
+        "Provide a plain scalar accepted by the field type or a valid JSON literal/object "
+        "for structured values."
+    )
 
 
 class SqlDatabaseSettings(BaseSettings):
@@ -119,8 +149,18 @@ class SqlDatabaseSettings(BaseSettings):
     execution_options: dict[str, Any] = Field(default_factory=dict)
 
 
+# Env spellings that disable an optional timeout (an empty value means "unset":
+# the default applies).
+_DISABLED_TIMEOUT_TOKENS = frozenset({"none", "null"})
+
+
 class FilesystemSettings(BaseModel):
-    """Typed environment-backed settings for filesystem connection profiles."""
+    """Typed environment-backed settings for filesystem connection profiles.
+
+    Field-for-field mirror of :class:`~boti.core.filesystem.FilesystemConfig`
+    (pinned by a test): anything configurable there is reachable from
+    ``{PREFIX}FS_*`` environment variables.
+    """
 
     fs_type: str = Field(default="file")
     fs_path: str = Field(..., min_length=1)
@@ -130,4 +170,25 @@ class FilesystemSettings(BaseModel):
     fs_token: SecretStr | None = Field(default=None)
     fs_region: str | None = Field(default=None)
     fs_verify_ssl: bool = Field(default=True)
+    fs_connect_timeout: float | None = Field(
+        default=10.0,
+        description=(
+            "TCP connect timeout in seconds for remote backends. "
+            "'none'/'null' (any case) disables the timeout."
+        ),
+    )
+    fs_read_timeout: float | None = Field(
+        default=30.0,
+        description=(
+            "Socket read timeout in seconds for remote backends. "
+            "'none'/'null' (any case) disables the timeout."
+        ),
+    )
     fs_options: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("fs_connect_timeout", "fs_read_timeout", mode="before")
+    @classmethod
+    def _disabled_timeout_tokens(cls, value: Any) -> Any:
+        if isinstance(value, str) and value.strip().lower() in _DISABLED_TIMEOUT_TOKENS:
+            return None
+        return value

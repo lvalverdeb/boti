@@ -15,6 +15,10 @@ import platform
 import sys
 from pathlib import Path
 
+# Optional extras declared in pyproject.toml: extra name -> the distribution
+# whose presence means it is installed.
+_OPTIONAL_EXTRAS: dict[str, str] = {"s3": "s3fs"}
+
 
 def _get_version() -> str:
     try:
@@ -23,9 +27,17 @@ def _get_version() -> str:
         return "0.0.0 (dev)"
 
 
+def _installed_version(distribution: str) -> str | None:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
 def _cmd_info(_args: argparse.Namespace) -> int:
     import boti
     from boti.core.project import ProjectService
+    from boti.core.secure_io import SecureResource
 
     version = _get_version()
     root = ProjectService.detect_project_root()
@@ -36,6 +48,15 @@ def _cmd_info(_args: argparse.Namespace) -> int:
     print(f"  Project:    {root}")
     print("  PyPI name:  boti")
     print(f"  Installed:  {Path(boti.__file__).parent.resolve()}")
+    print(f"  Open strategy: {SecureResource.open_strategy}")
+
+    print("  Extras:")
+    for extra, distribution in _OPTIONAL_EXTRAS.items():
+        installed = _installed_version(distribution)
+        if installed is None:
+            print(f"    - {extra}: missing (pip install 'boti[{extra}]')")
+        else:
+            print(f"    - {extra}: installed ({distribution}=={installed})")
 
     try:
         from boti.core import __all__ as public_api
@@ -106,6 +127,16 @@ def _check_critical_dependencies() -> list[str]:
     return errors
 
 
+def _report_optional_extras() -> None:
+    # Informational only: an extra is opt-in, so its absence is never an error.
+    for extra, distribution in _OPTIONAL_EXTRAS.items():
+        installed = _installed_version(distribution)
+        if installed is None:
+            print(f"  [info] Extra: {extra} not installed (pip install 'boti[{extra}]')")
+        else:
+            print(f"  [ok] Extra: {extra} ({distribution}=={installed})")
+
+
 def _cmd_check(_args: argparse.Namespace) -> int:
     errors: list[str] = [
         *_check_project_root(),
@@ -113,6 +144,7 @@ def _cmd_check(_args: argparse.Namespace) -> int:
         *_check_version_readable(),
         *_check_critical_dependencies(),
     ]
+    _report_optional_extras()
 
     if errors:
         print(f"\n  {len(errors)} issue(s) found:")
@@ -124,7 +156,8 @@ def _cmd_check(_args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    """Entry point. *argv* defaults to ``sys.argv[1:]``; tests pass it explicitly."""
     parser = argparse.ArgumentParser(
         prog="boti",
         description="Boti runtime CLI — diagnostics and environment verification",
@@ -143,7 +176,7 @@ def main() -> None:
     check_parser = sub.add_parser("check", help="Verify the environment is healthy")
     check_parser.set_defaults(func=_cmd_check)
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     sys.exit(args.func(args))
 
 

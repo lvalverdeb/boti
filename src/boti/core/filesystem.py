@@ -90,7 +90,9 @@ class FilesystemConfig(BaseModel):
 
     @classmethod
     def from_settings(cls, settings: FilesystemSettings, **overrides: Any) -> FilesystemConfig:
-        payload = settings.model_dump(exclude_none=True)
+        # exclude_unset, not exclude_none: an explicitly disabled timeout
+        # (FS_READ_TIMEOUT=none) must arrive here as None, not as the default.
+        payload = settings.model_dump(exclude_unset=True)
         payload.update(overrides)
         return cls(**payload)
 

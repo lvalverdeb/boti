@@ -73,7 +73,6 @@ def _make_logger(tmp: Path, name: str) -> Logger:
         log_dir=tmp / "logs",
         logger_name=name,
         log_file=name.replace(".", "_"),
-        debug=False,
     )
     return Logger(config)
 

@@ -27,7 +27,7 @@ def example_basic_logging() -> None:
         config = LoggerConfig(
             log_dir=Path(tmp_dir) / "logs",
             logger_name="examples.basic",
-            debug=True,
+            log_level=Logger.DEBUG,
         )
         logger = Logger(config)
         logger.set_level(Logger.DEBUG)
@@ -49,7 +49,7 @@ def example_pii_redaction() -> None:
             LoggerConfig(
                 log_dir=Path(tmp_dir) / "logs",
                 logger_name="examples.pii",
-                debug=True,
+                log_level=Logger.DEBUG,
             )
         )
         logger.set_level(Logger.DEBUG)
@@ -136,7 +136,7 @@ def example_exception_logging() -> None:
             LoggerConfig(
                 log_dir=Path(tmp_dir) / "logs",
                 logger_name="examples.exc",
-                debug=True,
+                log_level=Logger.DEBUG,
             )
         )
         logger.set_level(Logger.DEBUG)

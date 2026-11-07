@@ -87,7 +87,6 @@ async def async_main() -> None:
             LoggerConfig(
                 log_dir=data_dir / "logs",
                 logger_name="async_etl",
-                verbose=False,
             )
         )
 

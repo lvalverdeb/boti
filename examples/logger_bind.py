@@ -25,7 +25,7 @@ def example_basic_bind() -> None:
             LoggerConfig(
                 log_dir=Path(tmp_dir) / "logs",
                 logger_name="examples.bind.basic",
-                debug=True,
+                log_level=Logger.DEBUG,
             )
         )
         logger.set_level(Logger.DEBUG)
@@ -45,7 +45,7 @@ def example_chained_bind() -> None:
             LoggerConfig(
                 log_dir=Path(tmp_dir) / "logs",
                 logger_name="examples.bind.chained",
-                debug=True,
+                log_level=Logger.DEBUG,
             )
         )
         logger.set_level(Logger.DEBUG)
@@ -66,7 +66,7 @@ def example_bind_isolation() -> None:
             LoggerConfig(
                 log_dir=Path(tmp_dir) / "logs",
                 logger_name="examples.bind.isolation",
-                debug=True,
+                log_level=Logger.DEBUG,
             )
         )
         logger.set_level(Logger.DEBUG)
@@ -87,7 +87,7 @@ def example_bind_with_pii_redaction() -> None:
             LoggerConfig(
                 log_dir=Path(tmp_dir) / "logs",
                 logger_name="examples.bind.pii",
-                debug=True,
+                log_level=Logger.DEBUG,
             )
         )
         logger.set_level(Logger.DEBUG)

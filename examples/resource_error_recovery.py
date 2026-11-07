@@ -78,7 +78,9 @@ def example_cleanup_failure_is_logged() -> None:
     """Even when suppressed, the cleanup failure is written to the resource's logger."""
     with TemporaryDirectory() as tmp_dir:
         log_dir = Path(tmp_dir) / "logs"
-        logger = Logger(LoggerConfig(log_dir=log_dir, logger_name="examples.recovery", debug=True))
+        logger = Logger(
+            LoggerConfig(log_dir=log_dir, logger_name="examples.recovery", log_level=Logger.DEBUG)
+        )
 
         resource = BrokenResource(
             label="logged-failure",

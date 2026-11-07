@@ -22,14 +22,15 @@ class LoggerConfig(BaseModel):
     Configuration for the Boti logger.
     """
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    # extra="forbid": every field here is read by Logger; a field nothing reads
+    # (the former verbose/debug) must fail loudly rather than validate and do
+    # nothing.
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     log_dir: str | Path = Field(default="logs", description="Directory for log files.")
     logger_name: str = Field(..., description="Unique name for the logger.")
     log_file: str | None = Field(None, description="Base name for the log file.")
     log_level: int = Field(default=20, description="Logging level (e.g., logging.INFO).")
-    verbose: bool = Field(default=False, description="Enable verbose logging output.")
-    debug: bool = Field(default=False, description="Enable debug logging output.")
 
     _LOGGER_NAME_PATTERN: ClassVar[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_.-]+$")
 
