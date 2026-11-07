@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from redaction_corpus import NEGATIVE, POSITIVE, Creds, cycle_case, random_token
 
 from boti.core import Logger
-from boti.core.logger import PIISecretFilter
+from boti.core.logger import PIISecretFilter, _ClosedSink
 from boti.core.logger_filters import _Scan
 from boti.core.models import LoggerConfig
 
@@ -255,3 +255,45 @@ def test_preformatted_exc_text_is_scrubbed():
     record.exc_text = "Traceback...\nRuntimeError: token=abc123"
     assert PIISecretFilter().filter(record)
     assert "abc123" not in record.exc_text
+
+
+# ---------------------------------------------------------------------------
+# After Logger.close(): nothing reaches any destination, including lastResort
+# ---------------------------------------------------------------------------
+
+
+def test_nothing_is_emitted_after_close(temp_log_dir, capsys, monkeypatch):
+    logger = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="closed", log_file="closed"))
+    bound = logger.bind(req="r1")
+    logger.info("before")
+    time.sleep(0.3)
+    logger.close()
+
+    last_resort_calls: list[logging.LogRecord] = []
+    monkeypatch.setattr(logging.lastResort, "handle", last_resort_calls.append)
+    logger.error("password=hunter2")
+    bound.error("token=abc")
+    logging.getLogger("closed").error("raw stdlib user password=x")
+    time.sleep(0.3)
+
+    captured = capsys.readouterr()
+    assert "hunter2" not in captured.out + captured.err
+    assert "abc" not in captured.out + captured.err
+    assert "password=x" not in captured.out + captured.err
+    assert last_resort_calls == []
+    assert "before" in (temp_log_dir / "closed.log").read_text()
+    assert "hunter2" not in (temp_log_dir / "closed.log").read_text()
+
+
+def test_closed_sink_is_replaced_when_the_name_is_reopened(temp_log_dir):
+    first = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="reopen", log_file="a"))
+    first.close()
+    core = logging.getLogger("reopen")
+    assert any(isinstance(h, _ClosedSink) for h in core.handlers)
+
+    second = Logger(LoggerConfig(log_dir=temp_log_dir, logger_name="reopen", log_file="b"))
+    assert not any(isinstance(h, _ClosedSink) for h in core.handlers)
+    second.info("alive again")
+    time.sleep(0.3)
+    second.close()
+    assert "alive again" in (temp_log_dir / "b.log").read_text()

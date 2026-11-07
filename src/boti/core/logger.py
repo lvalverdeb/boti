@@ -66,6 +66,15 @@ def _default_formatter() -> logging.Formatter:
     )
 
 
+# Marker subclass so Logger can tell its own sink from a NullHandler a caller
+# attached; a handler is needed at all because a stdlib logger with none
+# falls through to logging.lastResort, which writes raw, unfiltered text to
+# stderr — bypassing PIISecretFilter.
+# spaghetti-ignore[lazy-class]: see above
+class _ClosedSink(logging.NullHandler):
+    """Swallows records for a name whose last Logger has been closed."""
+
+
 class Logger:
     """
     Thread-safe, non-blocking Logger designed for high-performance toolkits.
@@ -126,6 +135,9 @@ class Logger:
         self._sink: Sink = (self.logger_name, str(self.log_dir))
         self._destination_keys: set[tuple[str, str]] = set()
         self._extra: dict[str, Any] = {}
+        # An Event rather than a bool so bind() clones (copy.copy) share it:
+        # closing the parent silences every clone.
+        self._closed = threading.Event()
         self._setup_handlers()
 
     @classmethod
@@ -232,18 +244,25 @@ class Logger:
         Only needed by applications that create many short-lived named
         loggers; long-lived loggers can be left to interpreter shutdown.
         """
+        self._closed.set()
         with LoggerRuntime.lock:
             LoggerRuntime.remove_destinations(self._sink, self._destination_keys)
             if not LoggerRuntime.has_sinks_for(self.logger_name):
                 for handler in list(self._core.handlers):
                     if isinstance(handler, QueueHandler):
                         self._core.removeHandler(handler)
+                # Keep a handler on the name so a plain logging.getLogger(name)
+                # user does not fall through to lastResort (raw, unfiltered).
+                if not any(isinstance(h, _ClosedSink) for h in self._core.handlers):
+                    self._core.addHandler(_ClosedSink())
         with Logger._default_logger_lock:
             for key, cached in list(Logger._default_logger_cache.items()):
                 if cached is self:
                     del Logger._default_logger_cache[key]
 
     def _log(self, level: int, msg: str, *args: Any, **kwargs: Any) -> None:
+        if self._closed.is_set():
+            return
         extra: _LogExtra = kwargs.pop("extra", None)
         merged_extra = {**self._extra, **(extra or {}), SINK_ATTR: self._sink}
         kwargs.setdefault("stacklevel", self._CALLER_STACKLEVEL)
@@ -309,12 +328,7 @@ class Logger:
 
         with LoggerRuntime.lock:
             LoggerRuntime.ensure_listener()
-
-            # Attach QueueHandler to this logger
-            if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
-                qh = QueueHandler(LoggerRuntime.ensure_queue())
-                qh.addFilter(PIISecretFilter())
-                self._core.addHandler(qh)
+            self._ensure_queue_handler()
 
             # Add destinations to the global listener
             LoggerRuntime.add_destination(
@@ -338,10 +352,7 @@ class Logger:
         fmt = _default_formatter()
         with LoggerRuntime.lock:
             LoggerRuntime.ensure_listener()
-            if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
-                qh = QueueHandler(LoggerRuntime.ensure_queue())
-                qh.addFilter(PIISecretFilter())
-                self._core.addHandler(qh)
+            self._ensure_queue_handler()
             # Per sink, not per name: a second Logger with this name but another
             # log_dir needs its own console destination.
             console_key = (self.logger_name, f"__console__@{self.log_dir}")
@@ -349,6 +360,20 @@ class Logger:
                 console_key, logging.StreamHandler(sys.stderr), fmt, sink=self._sink
             )
             self._destination_keys.add(console_key)
+
+    def _ensure_queue_handler(self) -> None:
+        """Attach the filtered QueueHandler to the stdlib logger once per name.
+
+        Must be called with ``LoggerRuntime.lock`` held. A ``_ClosedSink`` left
+        by a previous ``close()`` on this name is removed first.
+        """
+        for handler in list(self._core.handlers):
+            if isinstance(handler, _ClosedSink):
+                self._core.removeHandler(handler)
+        if not any(isinstance(h, QueueHandler) for h in self._core.handlers):
+            qh = QueueHandler(LoggerRuntime.ensure_queue())
+            qh.addFilter(PIISecretFilter())
+            self._core.addHandler(qh)
 
     @staticmethod
     def _restrict_permissions(path: Path, mode: int) -> None:
