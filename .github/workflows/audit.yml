@@ -1,0 +1,55 @@
+name: Dependency audit
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Weekly, Monday 06:37 UTC — off the hour to avoid GitHub's congested slots.
+    - cron: "37 6 * * 1"
+
+# Actions are pinned to commit SHAs (tag in the trailing comment) so a moved
+# tag cannot change what runs here. Bump the SHA and the comment together.
+#
+# Runtime findings fail every run. Dev-group findings (ruff, mypy, pytest …)
+# fail only the weekly run, so a PR is not blocked by an advisory against a
+# linter but it surfaces within a week. Accepted findings go in
+# `ignore-vulns` with a justification and an expiry date in the comment.
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: pip-audit (${{ matrix.scope }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        scope: [runtime, dev]
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+
+      - name: Export the locked ${{ matrix.scope }} requirements
+        run: |
+          if [ "${{ matrix.scope }}" = "runtime" ]; then
+            uv export --locked --no-dev --no-emit-project --no-hashes --format requirements-txt > requirements.txt
+          else
+            uv export --locked --group dev --no-emit-project --no-hashes --format requirements-txt > requirements.txt
+          fi
+          wc -l requirements.txt
+
+      - name: Audit
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
+        # Dev findings block only the scheduled run (see header comment).
+        continue-on-error: ${{ matrix.scope == 'dev' && github.event_name != 'schedule' }}
+        with:
+          inputs: requirements.txt
+          no-deps: true
+          # ignore-vulns: |
+          #   GHSA-xxxx-xxxx-xxxx  # <why it does not apply>; re-evaluate by YYYY-MM-DD

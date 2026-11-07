@@ -11,12 +11,15 @@ on:
 
 jobs:
   test:
-    name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: Test (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.13"]
+        # macOS exercises the `walk` open strategy and the Darwin ENOTDIR
+        # path in secure_io; Linux asserts the openat2 strategy.
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -36,6 +39,25 @@ jobs:
         env:
           HYPOTHESIS_PROFILE: ci
         run: uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
+
+  changelog:
+    name: Changelog entry
+    # A pull request must touch CHANGELOG.md unless it carries the
+    # `no-changelog` label (docs-only, CI-only, …). Pushes to main are not
+    # gated: the release checklist in RELEASING.md owns the final shape.
+    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'no-changelog')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: CHANGELOG.md changed in this pull request
+        run: |
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- CHANGELOG.md; then
+            echo "::error::CHANGELOG.md was not updated; add an entry under [Unreleased] or label the PR no-changelog"
+            exit 1
+          fi
 
   lint:
     name: Lint

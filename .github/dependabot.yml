@@ -1,0 +1,18 @@
+# Keeps the SHA-pinned actions in .github/workflows current. Dependabot
+# preserves the `# vX.Y.Z` comment next to a SHA pin and updates both.
+#
+# Python dependencies are deliberately not delegated here: Dependabot does
+# not understand uv.lock in a nested workspace. `make upgrade-check` prints
+# what `uv lock --upgrade` would change, for a human to apply.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"

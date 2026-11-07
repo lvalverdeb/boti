@@ -7,6 +7,13 @@ on:
 # Actions are pinned to commit SHAs (tag in the trailing comment) so a moved
 # tag cannot change what runs here. Bump the SHA and the comment together.
 # The gate below is the same set of checks as ci.yml and `make verify`.
+#
+# Publishing is by PyPI trusted publishing (OIDC) from the `pypi`
+# environment, with PEP 740 attestations generated and verified. The token
+# path exists only as `make publish-breakglass` (see RELEASING.md).
+
+permissions:
+  contents: read
 
 jobs:
   test:
@@ -38,20 +45,63 @@ jobs:
         run: uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
 
   publish:
-    name: Build and publish
+    name: Build, publish and verify attestations
     needs: test
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
-      id-token: write  # required for PyPI trusted publishing (OIDC)
+      id-token: write      # PyPI trusted publishing (OIDC)
+      attestations: write  # PEP 740 attestations
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install uv
         uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
 
+      - name: Verify the tag matches pyproject.toml
+        # Closes the "tag v1.1.0 but pyproject says 1.0.11" class of error
+        # before anything is built.
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          project_version="$(uv run --no-project python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          echo "tag=${tag_version} pyproject=${project_version}"
+          test "${tag_version}" = "${project_version}" || { echo "::error::tag ${GITHUB_REF_NAME} does not match pyproject version ${project_version}"; exit 1; }
+          echo "VERSION=${project_version}" >> "$GITHUB_ENV"
+
       - name: Build sdist and wheel
-        run: uv build
+        # SOURCE_DATE_EPOCH pins archive timestamps to the tagged commit so a
+        # rebuild from the tag can be compared byte for byte (RELEASING.md).
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          uv build
+          ls -l dist/
+          tar -tzf dist/boti-*.tar.gz | grep -E '/(CHANGELOG|SECURITY)\.md$' || { echo "::error::CHANGELOG.md/SECURITY.md missing from the sdist"; exit 1; }
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
+
+      - name: Verify the published attestations
+        # Fails the workflow if the files on PyPI do not carry an attestation
+        # that verifies against this repository. PyPI can take a moment to
+        # serve new provenance, hence the retry.
+        run: |
+          wheel="boti-${VERSION}-py3-none-any.whl"
+          sdist="boti-${VERSION}.tar.gz"
+          for attempt in 1 2 3 4 5 6; do
+            if uvx pypi-attestations==0.0.31 verify pypi --repository "https://github.com/${GITHUB_REPOSITORY}" "pypi:${wheel}" \
+               && uvx pypi-attestations==0.0.31 verify pypi --repository "https://github.com/${GITHUB_REPOSITORY}" "pypi:${sdist}"; then
+              echo "attestations verified for ${wheel} and ${sdist}"
+              {
+                echo "## boti ${VERSION} published with verified attestations"
+                echo "- https://pypi.org/project/boti/${VERSION}/#files"
+                echo "- verified with \`pypi-attestations verify pypi --repository https://github.com/${GITHUB_REPOSITORY} pypi:${wheel}\`"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "attempt ${attempt}: attestations not verifiable yet; retrying in 20s"
+            sleep 20
+          done
+          echo "::error::attestation verification failed for boti ${VERSION}"
+          exit 1
