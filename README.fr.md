@@ -222,7 +222,7 @@ with SecureResource(config=config) as resource:
 
 ### Logger
 
-`Logger` fournit une couche de journalisation non bloquante et sûre pour les threads, avec une gestion sécurisée des fichiers et la suppression des données sensibles.
+`Logger` fournit une couche de journalisation non bloquante et sûre pour les threads, avec une gestion sécurisée des fichiers et la suppression des secrets : les valeurs sous toute clé contenant des mots de type `password`/`token`/`secret`/`key`, le texte `clé=valeur`, les identifiants dans les URL, les bytes et les objets imbriqués sont masqués ; les secrets sans mot-clé contextuel ne sont pas détectés.
 
 #### Logger rapide
 

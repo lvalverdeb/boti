@@ -222,7 +222,7 @@ with SecureResource(config=config) as resource:
 
 ### Logger
 
-`Logger` provides a thread-safe, non-blocking logging layer with secure file handling and sensitive-data redaction.
+`Logger` provides a thread-safe, non-blocking logging layer with secure file handling and secret redaction: values under any key that contains `password`/`token`/`secret`/`key`-style keywords, `key=value` text, URL credentials, bytes and nested objects are redacted; secrets with no keyword context are not detected.
 
 #### Quick logger
 

@@ -222,7 +222,7 @@ with SecureResource(config=config) as resource:
 
 ### Logger
 
-`Logger` proporciona una capa de logging no bloqueante y segura para hilos, con manejo seguro de archivos y redacción de datos sensibles.
+`Logger` proporciona una capa de logging no bloqueante y segura para hilos, con manejo seguro de archivos y redacción de secretos: se redactan los valores bajo cualquier clave que contenga palabras del tipo `password`/`token`/`secret`/`key`, el texto `clave=valor`, las credenciales en URLs, los bytes y los objetos anidados; los secretos sin contexto de palabra clave no se detectan.
 
 #### Logger rápido
 
