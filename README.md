@@ -555,6 +555,7 @@ An agent that implements only a synchronous `_cleanup()` still works under `asyn
 
 ## More docs
 
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability; [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what each security component defends, what it does not, and the test behind each claim; [`CHANGELOG.md`](CHANGELOG.md); [`RELEASING.md`](RELEASING.md).
 - [`examples/`](examples/)
 
   **Lifecycle — resources, cleanup, and pickle gating**

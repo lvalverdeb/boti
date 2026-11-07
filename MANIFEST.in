@@ -1,0 +1,7 @@
+# Root-level documents that must ship in the sdist (README and LICENSE are
+# included by the project metadata already).
+include CHANGELOG.md
+include SECURITY.md
+include docs/THREAT_MODEL.md
+prune tests
+prune examples

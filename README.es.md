@@ -555,6 +555,7 @@ Un agente que solo implementa un `_cleanup()` síncrono también funciona con `a
 
 ## Más documentación
 
+- [`SECURITY.md`](SECURITY.md) — cómo reportar una vulnerabilidad; [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — qué defiende cada componente de seguridad, qué no, y la prueba que respalda cada afirmación; [`CHANGELOG.md`](CHANGELOG.md); [`RELEASING.md`](RELEASING.md).
 - [`examples/`](examples/)
 
   **Ciclo de vida — recursos, limpieza y control de pickle**

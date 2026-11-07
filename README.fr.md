@@ -555,6 +555,7 @@ Un agent qui n'implémente qu'un `_cleanup()` synchrone fonctionne aussi avec `a
 
 ## Documentation complémentaire
 
+- [`SECURITY.md`](SECURITY.md) — comment signaler une vulnérabilité ; [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — ce que chaque composant de sécurité défend, ce qu'il ne défend pas, et le test derrière chaque affirmation ; [`CHANGELOG.md`](CHANGELOG.md); [`RELEASING.md`](RELEASING.md).
 - [`examples/`](examples/)
 
   **Cycle de vie — ressources, nettoyage et contrôle pickle**
