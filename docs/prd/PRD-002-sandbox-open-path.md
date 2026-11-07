@@ -6,7 +6,7 @@
 | Target | 1.2.0 (minor — behaviour change in R5) |
 | Owner | secure_io maintainers |
 | Modules | `src/boti/core/secure_io.py`, `src/boti/core/security.py` |
-| Status | Draft |
+| Status | Done — shipped in 1.2.0 |
 
 ## 1. Problem
 

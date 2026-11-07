@@ -6,7 +6,7 @@
 | Target | 1.2.0 |
 | Owner | core maintainers |
 | Modules | `src/boti/core/settings.py`, `src/boti/core/models.py`, `src/boti/main.py`, `examples/README.md`, `tests/` |
-| Status | Draft |
+| Status | Done — shipped in 1.2.0 |
 
 ## 1. Problem
 

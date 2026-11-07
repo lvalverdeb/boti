@@ -1,6 +1,6 @@
 [project]
 name = "boti"
-version = "1.1.1"
+version = "1.2.0"
 description = "Runtime primitives for reliable Python data pipelines, secure file access, and notebook-to-production workflows"
 readme = "README.md"
 license = "MIT"
@@ -37,6 +37,8 @@ Homepage = "https://github.com/lvalverdeb/boti"
 Repository = "https://github.com/lvalverdeb/boti"
 Documentation = "https://github.com/lvalverdeb/boti#readme"
 Issues = "https://github.com/lvalverdeb/boti/issues"
+Changelog = "https://github.com/lvalverdeb/boti/blob/main/CHANGELOG.md"
+Security = "https://github.com/lvalverdeb/boti/blob/main/SECURITY.md"
 
 [project.scripts]
 boti = "boti.main:main"

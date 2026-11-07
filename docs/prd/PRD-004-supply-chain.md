@@ -6,7 +6,7 @@
 | Target | 1.2.0 (CI/PyPI only; no package code change) |
 | Owner | repository owner (PyPI settings) + CI maintainers |
 | Files | `.github/workflows/*.yml`, `Makefile`, `pyproject.toml`, `.github/dependabot.yml` |
-| Status | Draft |
+| Status | Done — shipped in 1.2.0 |
 
 ## 1. Problem
 

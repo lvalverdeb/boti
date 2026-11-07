@@ -6,7 +6,7 @@
 | Target | 1.2.0 |
 | Owner | all maintainers |
 | Modules | `tests/`, `pyproject.toml` (dev group), `.github/workflows/ci.yml` |
-| Status | Draft |
+| Status | Done — shipped in 1.2.0 |
 
 ## 1. Problem
 

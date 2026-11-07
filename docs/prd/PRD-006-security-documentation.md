@@ -6,7 +6,7 @@
 | Target | 1.2.0 (lands last; documents the state after PRD-001…005) |
 | Owner | repository owner |
 | Files | `SECURITY.md`, `docs/THREAT_MODEL.md`, `RELEASING.md`, `SDD.md`, `README*.md`, `CHANGELOG.md` |
-| Status | Draft |
+| Status | Done — shipped in 1.2.0 |
 
 ## 1. Problem
 
