@@ -36,7 +36,7 @@ class LoggerConfig(BaseModel):
 
     @staticmethod
     def _validate_base_log_name(value: str) -> str:
-        if not value or value in {".", ".."} or "/" in value or "\\" in value:
+        if not value or value in {".", ".."} or "/" in value or "\\" in value or "\x00" in value:
             raise ValueError("log_file must be a simple base name, not a path.")
         return value
 

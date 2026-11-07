@@ -4,6 +4,7 @@ Tests for PIISecretFilter and the Logger's post-close redaction guarantee (PRD-0
 
 import logging
 import time
+from types import SimpleNamespace
 
 import pytest
 from pydantic import SecretStr
@@ -100,6 +101,18 @@ def test_keyword_in_message_redacts_whole_message(msg, args):
         assert value not in record.getMessage()
 
 
+def test_compound_keyword_assignment_in_message_is_redacted():
+    """``db_password_v2=%s``: the keyword is a suffix of a longer name and the
+    secret arrives as the arg — the message is blanked like a bare mention."""
+    record = _filtered_record("db_password_v2=%s", ("hunter2",))
+    assert record.getMessage() == PIISecretFilter._REDACTED_MESSAGE
+
+
+def test_keyword_as_prefix_of_an_ordinary_word_is_not_blanked():
+    record = _filtered_record("processed %d tokens for the tokenizer", (5,))
+    assert record.getMessage() == "processed 5 tokens for the tokenizer"
+
+
 def test_bare_keyword_mention_is_over_redacted():
     """The documented tradeoff: a harmless mention is redacted too."""
     record = _filtered_record("does not require a password")
@@ -163,6 +176,31 @@ def test_cycles_through_dicts_lists_and_objects_terminate():
             self.password = token
 
     record = _filtered_record("safe", extra={"node": Node()})
+    assert token not in _rendered(record)
+
+
+def test_same_plain_object_twice_in_one_record_is_redacted_both_times():
+    """Found by the R10 property: the second occurrence of a plain object used
+    to be served raw because the cached revisit reported "nothing changed"."""
+    token = random_token()
+    obj = SimpleNamespace(password=token, user="bob")
+    record = _filtered_record("value=%s", (obj,), extra={"payload": obj, "again": [obj, obj]})
+    assert token not in _rendered(record)
+    assert record.payload == {"password": "[REDACTED]", "user": "bob"}
+
+
+def test_plain_object_with_revealing_repr_in_a_cycle_does_not_leak():
+    token = random_token()
+
+    class Loud:
+        def __init__(self) -> None:
+            self.me = self
+            self.token = token
+
+        def __repr__(self) -> str:
+            return f"Loud(token={self.token!r})"
+
+    record = _filtered_record("safe", extra={"node": Loud()})
     assert token not in _rendered(record)
 
 

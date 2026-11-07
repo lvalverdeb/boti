@@ -60,6 +60,10 @@ POSITIVE: list[Case] = [
     ("json double-quoted", lambda t: f'{{"password":"{t}"}}'),
     ("json single-quoted", lambda t: f"{{'token': '{t}'}}"),
     ("yaml", lambda t: f'password: "{t}"'),
+    ("compound key in json string", lambda t: f'{{"db_password_v2":"{t}"}}'),
+    ("compound assignment in text", lambda t: f"aws_secret_access_key={t}"),
+    ("camel-case suffix key in text", lambda t: f"accessToken={t}"),
+    ("header name with prefix", lambda t: f"X-Api-Key-2: {t}"),
     # spacing variants
     ("spaced =", lambda t: f"password = {t}"),
     ("=space", lambda t: f"password= {t}"),

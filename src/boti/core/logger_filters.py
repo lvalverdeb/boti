@@ -30,29 +30,50 @@ _KEY_KEYWORDS = (
     r"password|passwd|secret|token|api_?key|access_?key|auth_?token"
     r"|authorization|bearer|private_?key|client_?secret|credential|session|cookie"
 )
+# Inside text an assignment delimiter follows the keyword, which removes the
+# ambiguity that keeps the key-only names out of the message rule:
+# "session: abc" is a credential, "session started" is not.
+_ASSIGNMENT_KEYWORDS = rf"{_VALUE_KEYWORDS}|credential|session|cookie"
 
-_MESSAGE_KEYWORD_RE = re.compile(rf"(?i)\b(?:{_VALUE_KEYWORDS})\b")
+# No word boundary *before* the keyword: ``db_password``, ``accessToken`` and
+# ``x-api-key`` must count. After it, either a boundary (a plain mention) or a
+# run of name characters ending in an assignment delimiter (``db_password_v2=``,
+# ``api_keys:``) — so "processed 5 tokens" is not blanked but "tokens=%s" is.
+_MESSAGE_KEYWORD_RE = re.compile(rf"(?i)(?:{_VALUE_KEYWORDS})(?:[\w-]*[=:]|\b)")
 _KEY_KEYWORD_RE = re.compile(rf"(?:{_KEY_KEYWORDS})")
 
-# Group 1 keeps the keyword and delimiter; the value — a quoted string, a
+# Group 1 keeps the key and delimiter; the value — a quoted string, a
 # ``Bearer <token>`` pair, or everything up to a separator/newline — is
 # replaced. Running to a separator rather than to whitespace over-redacts the
 # rest of a free-text line ("password=a b c" loses "b c"), which is the safe
-# direction.
+# direction. ``[\w-]*`` lets a suffixed key (``db_password_v2``) through to the
+# delimiter; "passwords=5" losing its value is the same safe direction. The
+# closing quote of a key may be backslash-escaped (JSON embedded in JSON).
+# ``[REDACTED]`` is itself an accepted value so a second pass is a no-op
+# rather than ``[REDACTED]]``.
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
-    rf"(?i)(\b(?:{_VALUE_KEYWORDS})\b(?:\s+is\s*[=:]?\s*|[\"']?\s*[=:]\s*))"
-    r"(?:(?:bearer|basic)\s+[^\s,;}\]]+|\"[^\"]*\"|'[^']*'|[^,;}\]\n]+)"
+    rf"(?i)((?:{_ASSIGNMENT_KEYWORDS})[\w-]*(?:\s+is\s*[=:]?\s*|(?:\\*[\"'])?\s*[=:]\s*))"
+    r"(?:\[REDACTED\]|(?:bearer|basic)\s+[^\s,;}\]]+|\"[^\"]*\"|'[^']*'|[^,;}\]\n]+)"
 )
 
 # ``scheme://user:pass@host`` — the userinfo section is a credential whatever
 # the scheme (postgresql, redis, amqp, s3, http …).
 _URL_CREDENTIAL_RE = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/\s:@]*:[^@\s/]+@")
 
-# Cheap pre-check run before the two substitutions above: a superset of every
-# fragment they can match, so a string that fails it cannot contain anything to
-# redact. Most strings fail it, and one ``search`` is far cheaper than two
-# ``sub`` scans.
-_TEXT_TRIGGER_RE = re.compile(r"(?i)password|passwd|secret|token|key|auth|bearer|://")
+# Cheap pre-check run before the substitutions above and the message rule: a
+# superset of every fragment they can match, so a string that fails it cannot
+# contain anything to redact. Most strings fail it. Case-sensitive on purpose
+# and applied to ``text.lower()``: an ``(?i)`` alternation cannot use ``re``'s
+# first-character prefilter (ignore-case literals form no charset prefix) and
+# measured ~3.5× slower than lower-then-search.
+_TEXT_TRIGGER_RE = re.compile(
+    r"password|passwd|secret|token|key|auth|bearer|credential|session|cookie|://"
+)
+
+
+def _may_need_redaction(text: str) -> bool:
+    return _TEXT_TRIGGER_RE.search(text.lower()) is not None
+
 
 _REDACTED = "[REDACTED]"
 # An object with more fields than this is not inspected (cost cap); it is
@@ -170,7 +191,7 @@ class PIISecretFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         scan = _Scan()
-        if isinstance(record.msg, str):
+        if isinstance(record.msg, str) and _may_need_redaction(record.msg):
             if "://" in record.msg:
                 record.msg = _URL_CREDENTIAL_RE.sub(rf"\1{_REDACTED}@", record.msg)
             if _MESSAGE_KEYWORD_RE.search(record.msg):
@@ -226,7 +247,7 @@ class PIISecretFilter(logging.Filter):
 
     @staticmethod
     def _redact_text(text: str, scan: _Scan) -> str:
-        if _TEXT_TRIGGER_RE.search(text) is None:
+        if not _may_need_redaction(text):
             return text
         redacted = _URL_CREDENTIAL_RE.sub(rf"\1{_REDACTED}@", text)
         redacted = _SENSITIVE_ASSIGNMENT_RE.sub(rf"\g<1>{_REDACTED}", redacted)
@@ -247,7 +268,7 @@ class PIISecretFilter(logging.Filter):
         if isinstance(value, str):
             # Trigger check inlined: most strings fail it, and this is the
             # single most frequent leaf.
-            if _TEXT_TRIGGER_RE.search(value) is None:
+            if _TEXT_TRIGGER_RE.search(value.lower()) is None:
                 return value
             return self._redact_text(value, scan)
         if value is None or isinstance(value, (bool, int, float)):
@@ -309,19 +330,23 @@ class PIISecretFilter(logging.Filter):
             return f"[UNINSPECTABLE {type(value).__name__}: too many fields]"
         changed_before = scan.changed
         scan.changed = False
-        if structured:
-            # Always rendered as a dict; register the object itself for cycles.
-            scan.keepalive.append(fields)
-            scan.visited[id(value)] = redacted = {}
-            redacted.update(self._redact_mapping(fields, scan))
-        else:
-            # vars() is the live __dict__, so routing it through _redact_value's
-            # visited check handles cycles through plain objects without
-            # registering the object itself.
-            redacted = self._redact_value(fields, scan)
+        # Register the object before recursing so a cycle back to it resolves
+        # to the copy being built. ``fields`` is a temporary for dataclasses
+        # and models (kept alive: visited is keyed by id), the live __dict__
+        # for plain objects.
+        scan.keepalive.append(fields)
+        scan.visited[id(value)] = redacted = {}
+        redacted.update(self._redact_mapping(fields, scan))
         changed_here = scan.changed
         scan.changed = changed_before or changed_here
-        return redacted if structured or changed_here else value
+        if structured or changed_here:
+            return redacted
+        # Nothing to redact in a plain object: pass it through, and record that
+        # verdict so a second occurrence in the same record gets the same one
+        # (it used to be served the raw object because "nothing changed" on
+        # the cached revisit).
+        scan.visited[id(value)] = value
+        return value
 
     @staticmethod
     def _object_fields(value: Any) -> tuple[bool, dict[str, Any] | None]:
