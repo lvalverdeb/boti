@@ -4,6 +4,7 @@ Shared pytest fixtures for boti.core tests.
 
 import datetime
 import gc
+import os
 import shutil
 import sqlite3
 from pathlib import Path
@@ -12,6 +13,26 @@ from tempfile import mkdtemp
 import pytest
 
 from boti.core.logger_runtime import LoggerRuntime
+
+
+def _register_hypothesis_profiles() -> None:
+    """``ci``: deterministic, bounded, reproducible from the log alone
+    (``print_blob``); ``dev``: more examples and the local example database.
+    ``HYPOTHESIS_PROFILE`` selects (CI sets ``ci``; ``make test`` sets ``dev``).
+    Imported lazily so collection still works without the dev group; the
+    property files ``importorskip`` hypothesis themselves."""
+    try:
+        from hypothesis import settings
+    except ImportError:
+        return
+    settings.register_profile(
+        "ci", derandomize=True, max_examples=200, deadline=None, database=None, print_blob=True
+    )
+    settings.register_profile("dev", max_examples=1000, deadline=None)
+    settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
+
+
+_register_hypothesis_profiles()
 
 # Python 3.12+ deprecated the implicit sqlite3 date/datetime adapters.
 # Register explicit ISO-string adapters so SQLAlchemy tests using SQLite

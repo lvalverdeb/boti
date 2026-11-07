@@ -52,6 +52,8 @@ dev = [
     "pytest-cov>=6.0.0,<8.0.0",
     "ruff>=0.11.0,<0.16.0",
     "mypy>=1.14.0,<2.0.0",
+    # property-based tests (tests/*_props.py); profiles in tests/conftest.py
+    "hypothesis>=6.100,<7",
     # examples/filesystem_supported_backends.py instantiates a real S3FileSystem
     "s3fs>=2026.3.0,<2027.0.0",
 ]
@@ -74,6 +76,9 @@ boti = ["py.typed"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "property: property-based tests (Hypothesis); profile via HYPOTHESIS_PROFILE=ci|dev",
+]
 filterwarnings = [
     "ignore::DeprecationWarning:sqlite3",
 ]

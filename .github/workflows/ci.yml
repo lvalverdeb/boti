@@ -33,6 +33,8 @@ jobs:
         run: uv sync --locked --group dev
 
       - name: Run tests with coverage
+        env:
+          HYPOTHESIS_PROFILE: ci
         run: uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
 
   lint:

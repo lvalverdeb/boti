@@ -33,6 +33,8 @@ jobs:
         run: uv run mypy src/
 
       - name: Run tests
+        env:
+          HYPOTHESIS_PROFILE: ci
         run: uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
 
   publish:

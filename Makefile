@@ -18,13 +18,13 @@ help:
 	@echo "  upload       - Alias for publish (kept for backward compatibility)"
 	@echo "  upload-test  - Alias for publish-test (kept for backward compatibility)"
 	@echo "  install-dev  - Install package with dev dependencies"
-	@echo "  test         - Run test suite"
+	@echo "  test         - Run test suite (Hypothesis 'dev' profile: 1000 examples, local example DB)"
 	@echo "  lint         - Run ruff linter"
 	@echo "  format       - Run ruff formatter"
 	@echo "  format-check - Check formatting without applying (matches CI)"
 	@echo "  typecheck    - Run mypy type checker"
 	@echo "  coverage     - Run tests with coverage report"
-	@echo "  verify       - Run the exact checks CI runs: lint + format-check + typecheck + coverage-gated tests"
+	@echo "  verify       - Run the exact checks CI runs: lint + format-check + typecheck + coverage-gated tests (Hypothesis 'ci' profile)"
 	@echo "  check        - verify + dry-run publish"
 
 clean:
@@ -51,7 +51,7 @@ install-dev:
 	uv sync --group dev
 
 test:
-	uv run pytest
+	HYPOTHESIS_PROFILE=dev uv run pytest
 
 lint:
 	uv run ruff check src/ tests/ examples/
@@ -71,7 +71,7 @@ coverage:
 # Mirrors .github/workflows/ci.yml exactly (test + lint + typecheck jobs),
 # so a local publish can't happen without the same checks CI enforces.
 verify: lint format-check typecheck
-	uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
+	HYPOTHESIS_PROFILE=ci uv run pytest --cov=boti --cov-report=term-missing --cov-fail-under=80
 
 check: verify build
 	@$(LOAD_ENV); $(REQUIRE_PUBLISH_TOKEN); uv publish --dry-run --token "$$UV_PUBLISH_TOKEN" $$(ls $(REPO_ROOT)/dist/boti-*)
