@@ -172,7 +172,7 @@ env_file = ProjectService.setup_environment(project_root)
 
 ### Acceso seguro a archivos
 
-`SecureResource` envuelve las operaciones de archivos en un sandbox. Por defecto permite rutas bajo la raíz del proyecto (un `project_root` explícito, o una detectada a partir de un marcador `pyproject.toml`/`.git`/`.env`/`.agent` — nunca un directorio adivinado) y el directorio temporal del sistema, y puedes agregar rutas de confianza adicionales de forma explícita.
+`SecureResource` envuelve las operaciones de archivos en un sandbox. Por defecto permite rutas bajo la raíz del proyecto (un `project_root` explícito, o una detectada a partir de un marcador `pyproject.toml`/`.git`/`.env`/`.agent` — nunca un directorio adivinado) y el directorio temporal del sistema, y puedes agregar rutas de confianza adicionales de forma explícita. Las rutas relativas se anclan a la raíz del proyecto, nunca al directorio de trabajo.
 
 ```python
 from pathlib import Path
@@ -180,10 +180,10 @@ from pathlib import Path
 from boti import SecureResource
 from boti.core.models import ResourceConfig
 
-config = ResourceConfig(project_root=Path.cwd())
+config = ResourceConfig(project_root=Path("/workspace/project"))
 
 with SecureResource(config=config) as resource:
-    contents = resource.read_text_secure("README.md")
+    contents = resource.read_text_secure("README.md")  # relativo a project_root, nunca al cwd
 ```
 
 #### Permitir un directorio de confianza adicional
@@ -253,7 +253,7 @@ config = LoggerConfig(
     log_dir=Path("/workspace/proyecto/logs"),
     logger_name="etl.pipeline",
     log_file="etl_pipeline",
-    verbose=True,
+    log_level=Logger.INFO,
 )
 
 logger = Logger(config)

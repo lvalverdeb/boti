@@ -105,11 +105,11 @@ All arrows flow **down**: lower modules never import from higher ones at runtime
 
 Every configuration surface is a Pydantic `BaseModel`:
 
-- **`LoggerConfig`** — validates logger names against `^[A-Za-z0-9_.-]+$`, rejects path traversal in `log_dir`, enforces base-name constraints on `log_file`.
+- **`LoggerConfig`** — exactly the four fields `Logger` reads (`log_dir`, `logger_name`, `log_file`, `log_level`), `extra="forbid"` so a field nothing reads cannot validate silently; validates logger names against `^[A-Za-z0-9_.-]+$`, rejects path traversal in `log_dir`, enforces base-name constraints on `log_file`.
 - **`ResourceConfig`** — carries `allow_pickle` (gated), `extra_allowed_paths` (sandbox overrides), optional pre-configured `logger`.
 - **`FilesystemConfig`** — validates `fs_type` against an allowlist of 23 known backends, applies the SSRF guard (§4.1) to every field that can name a network endpoint, normalises aliases via `from_settings` factory. `validate_assignment=True`: the validators re-run on `config.fs_endpoint = …` after construction, so the guard cannot be bypassed by mutation.
 - **`SqlDatabaseSettings`** — provides sane connection-pool defaults (5/10/30/1800).
-- **`FilesystemSettings`** — `BaseModel` (not `BaseSettings`), designed to be loaded via `load_prefixed_model(prefix="ETL_")`.
+- **`FilesystemSettings`** — `BaseModel` (not `BaseSettings`), designed to be loaded via `load_prefixed_model(prefix="ETL_")`. Field-for-field mirror of `FilesystemConfig`, pinned by `test_filesystem_settings_covers_every_config_field`, so no config knob can lack an env path; `FS_CONNECT_TIMEOUT`/`FS_READ_TIMEOUT` accept `none`/`null` to disable a timeout.
 - **`AgentConfig`** — the logging subset of `ResourceConfig` (`verbose`, `debug`, `logger`, `skip_logger`), `extra="forbid"`.
 
 ```python
@@ -173,8 +173,9 @@ with ManagedResource(config=ResourceConfig(allow_pickle=True)) as res:
 Extends `ManagedResource` with path-sandboxing:
 
 - **Root is never guessed.** `project_root` comes from the config or from `ProjectService.find_project_root()`, which returns `None` instead of the cwd/`$HOME` fallbacks that `detect_project_root()` applies for log directories. No marker and no explicit root → `ValueError` at construction (finalizer detached), not a sandbox anchored to wherever the process happens to run.
-- **`get_secure_path(path)`** — resolves the path and checks it lies within `allowed_paths` (project root + tempdir + configured extras). Raises `PermissionError` on violation.
-- **`open_secure` / `write_text_secure` / `read_text_secure`** — `open_secure` validates with `get_secure_path`, then on POSIX opens the file component by component from its sandbox root with `O_NOFOLLOW` via `dir_fd` (`_open_beneath`). A directory or file on the validated path that is swapped for a symlink between the check and the open fails with `ELOOP`, surfaced as `PermissionError`, instead of being followed out of the sandbox (see §6.1). `write_text_secure`/`read_text_secure` go through `open_secure`. Non-POSIX platforms fall back to `open()`.
+- **Relative paths anchor to the root.** `get_secure_path`, the `open_secure` family and `extra_allowed_paths` join a relative path to `project_root` before resolving it — never to the process working directory (which, when it happened to lie inside another allowed root such as the system temp dir, silently read a different file than the caller meant), and `~` is not expanded.
+- **`get_secure_path(path)`** — resolves the path and checks it lies within `allowed_paths` (project root + tempdir + configured extras). Raises `PermissionError` on violation. It is a *check*; only the `open_secure` family also defends the open itself.
+- **`open_secure` / `write_text_secure` / `read_text_secure`** — `open_secure` validates with `get_secure_path`, then opens through the strongest strategy the host supports, exposed as the diagnostic `SecureResource.open_strategy` (also printed by `boti info`): `openat2` (Linux ≥ 5.6, `_openat2.py`: one syscall with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS`, enforced by the kernel; `EAGAIN` from a concurrent rename is retried three times) → `walk` (POSIX with `dir_fd`: the file is opened component by component from its sandbox root with `O_NOFOLLOW`, `_open_beneath`) → `open` (no `dir_fd`, Windows: check-then-open only). Under the first two, a directory or file on the validated path that is swapped for a symlink between the check and the open fails with `ELOOP` (or `EXDEV` for an escape), surfaced as `PermissionError`, instead of being followed out of the sandbox (see §6.1). The three strategies share one test suite, parametrised over every strategy the host can run; CI asserts `openat2` on Linux and `walk` on macOS so a silent fallback fails the build. `BOTI_OPEN_STRATEGY` forces a supported strategy for tests only.
 - **Symlink rejection** — `extra_allowed_paths` entries that are symlinks are rejected at construction time, not at access time.
 - **Violation logging survives PII redaction** — the offending path is passed as a lazy `%`-argument, never interpolated into the message. `PIISecretFilter` blanks any *message* that mentions a sensitive keyword, and the most common probe target is literally `/etc/passwd`; interpolating it would turn the alert into `[REDACTED SENSITIVE DATA]`.
 
@@ -310,8 +311,8 @@ settings = load_prefixed_model(FilesystemSettings, "ETL_", env_file=".env.etl")
 1. Reads `.env` file (if provided) via `DotEnvSettingsSource` — preserves casing.
 2. Merges with `os.environ` (later takes precedence).
 3. For each field in `model_cls`, looks up `{PREFIX}{FIELD_NAME_UPPER}`.
-4. Uses `TypeAdapter` for type coercion — tries Python coercion first, then JSON parsing for structured values (lists, dicts).
-5. Calls `model_cls.model_validate(payload)` — runs Pydantic validators.
+4. Uses `TypeAdapter` for type coercion — tries Python coercion first, then JSON parsing for structured values (lists, dicts); a string neither accepts is passed through so the model's own `mode="before"` validators can interpret it (the model owns its coercion semantics, the loader only maps names).
+5. Calls `model_cls.model_validate(payload)` — runs Pydantic validators; a rejection is re-raised as `ValueError` naming the offending environment variable(s).
 
 **Key decision — runtime prefix, not `BaseSettings`:** Explicit prefix parameter means the same model can be loaded from different env namespaces without redefining the model class. `FilesystemSettings` is a plain `BaseModel`, not `BaseSettings`, so it has no static env-binding — keeping it composable and testable.
 
@@ -360,7 +361,7 @@ SecureResource(config=ResourceConfig(
 
 This is correct behaviour — allowing symlinks to implicitly widen the sandbox would be a security hole. The requirement to explicitly allowlist the target is intentional.
 
-**Check-then-open (TOCTOU):** `get_secure_path` resolves and checks; the open happens afterwards. Between the two, an attacker with write access inside the sandbox could replace a validated directory with a symlink to the outside. `open_secure` therefore does not `open(resolved)`: it opens the sandbox root (`O_DIRECTORY`), then each path component with `O_NOFOLLOW` relative to the previous descriptor (`dir_fd`), then the file itself with `O_NOFOLLOW` — the same discipline as `openat2(RESOLVE_BENEATH)`. Any symlink met on the way raises `ELOOP`, mapped to `PermissionError`. The sandbox root's own ancestors are trusted, as they are for any `chroot`-style boundary.
+**Check-then-open (TOCTOU):** `get_secure_path` resolves and checks; the open happens afterwards. Between the two, an attacker with write access inside the sandbox could replace a validated directory with a symlink to the outside. `open_secure` therefore does not `open(resolved)`. On Linux ≥ 5.6 it opens the sandbox root and asks the kernel to resolve the remainder with `openat2(RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS)` — atomic, and immune to `..`, symlinks and `/proc` magic links alike (`EXDEV`/`ELOOP`, mapped to `PermissionError`). Elsewhere on POSIX it applies the same discipline in userspace: open the root, then each path component with `O_NOFOLLOW` relative to the previous descriptor (`dir_fd`), then the file itself with `O_NOFOLLOW`; any symlink met on the way raises `ELOOP`, and a `..` component (impossible in a resolved path; present only if resolution was bypassed) is refused before the walk steps. The sandbox root's own ancestors are trusted, as they are for any `chroot`-style boundary. Where `dir_fd` is unsupported (Windows) the open is a plain check-then-open and `open_strategy == "open"` says so.
 
 ### 6.2 Unpickling Guard
 

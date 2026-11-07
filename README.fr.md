@@ -172,7 +172,7 @@ env_file = ProjectService.setup_environment(project_root)
 
 ### Accès sécurisé aux fichiers
 
-`SecureResource` encapsule les opérations sur les fichiers dans un bac à sable. Par défaut, il autorise les chemins sous la racine du projet (un `project_root` explicite, ou une racine détectée à partir d'un marqueur `pyproject.toml`/`.git`/`.env`/`.agent` — jamais un répertoire deviné) et le répertoire temporaire du système, et vous pouvez ajouter explicitement des chemins de confiance supplémentaires.
+`SecureResource` encapsule les opérations sur les fichiers dans un bac à sable. Par défaut, il autorise les chemins sous la racine du projet (un `project_root` explicite, ou une racine détectée à partir d'un marqueur `pyproject.toml`/`.git`/`.env`/`.agent` — jamais un répertoire deviné) et le répertoire temporaire du système, et vous pouvez ajouter explicitement des chemins de confiance supplémentaires. Les chemins relatifs sont ancrés à la racine du projet, jamais au répertoire de travail.
 
 ```python
 from pathlib import Path
@@ -180,10 +180,10 @@ from pathlib import Path
 from boti import SecureResource
 from boti.core.models import ResourceConfig
 
-config = ResourceConfig(project_root=Path.cwd())
+config = ResourceConfig(project_root=Path("/workspace/project"))
 
 with SecureResource(config=config) as resource:
-    contents = resource.read_text_secure("README.md")
+    contents = resource.read_text_secure("README.md")  # relatif à project_root, jamais au cwd
 ```
 
 #### Autoriser un répertoire de confiance supplémentaire
@@ -253,7 +253,7 @@ config = LoggerConfig(
     log_dir=Path("/workspace/projet/logs"),
     logger_name="etl.pipeline",
     log_file="etl_pipeline",
-    verbose=True,
+    log_level=Logger.INFO,
 )
 
 logger = Logger(config)

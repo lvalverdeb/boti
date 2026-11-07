@@ -172,7 +172,7 @@ env_file = ProjectService.setup_environment(project_root)
 
 ### Secure file access
 
-`SecureResource` wraps file operations in a sandbox. By default it allows paths under the project root (explicit `project_root`, or one detected from a `pyproject.toml`/`.git`/`.env`/`.agent` marker — never a guessed directory) and the system temporary directory, and you can add extra allowlisted paths explicitly.
+`SecureResource` wraps file operations in a sandbox. By default it allows paths under the project root (explicit `project_root`, or one detected from a `pyproject.toml`/`.git`/`.env`/`.agent` marker — never a guessed directory) and the system temporary directory, and you can add extra allowlisted paths explicitly. Relative paths are anchored to the project root, never to the working directory.
 
 ```python
 from pathlib import Path
@@ -180,10 +180,10 @@ from pathlib import Path
 from boti import SecureResource
 from boti.core.models import ResourceConfig
 
-config = ResourceConfig(project_root=Path.cwd())
+config = ResourceConfig(project_root=Path("/workspace/project"))
 
 with SecureResource(config=config) as resource:
-    contents = resource.read_text_secure("README.md")
+    contents = resource.read_text_secure("README.md")  # relative to project_root, never to cwd
 ```
 
 #### Allow an additional trusted directory
@@ -253,7 +253,7 @@ config = LoggerConfig(
     log_dir=Path("/workspace/project/logs"),
     logger_name="etl.pipeline",
     log_file="etl_pipeline",
-    verbose=True,
+    log_level=Logger.INFO,
 )
 
 logger = Logger(config)
