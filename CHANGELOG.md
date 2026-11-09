@@ -31,6 +31,7 @@ under *Changed*.
 
 ### Security
 - Secret-filter leaks listed under *Fixed*.
+- Dependency floors raised past two advisories the new audit found on its first run: `fsspec>=2026.6.0` (PYSEC-2026-4217 — unsandboxed Jinja2 rendering in `ReferenceFileSystem`, remote code execution from an attacker-controlled Kerchunk document; boti never instantiates that backend, but an installer could resolve the vulnerable version) and `pydantic-settings>=2.14.2` (CVE-2026-58203 — symlink escape and size-cap bypass in `NestedSecretsSettingsSource`, which boti does not use). Lock moved to fsspec 2026.9.0 and pydantic-settings 2.16.2.
 
 ## [1.1.1] - 2026-11-07
 
